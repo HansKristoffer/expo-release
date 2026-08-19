@@ -1,6 +1,6 @@
 {
 	"name": "expo-release",
-	"version": "2.0.0",
+	"version": "2.1.0",
 	"description": "Fingerprint-driven Expo EAS release: OTA update or native store build",
 	"type": "module",
 	"module": "./dist/index.js",
