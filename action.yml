@@ -1,0 +1,146 @@
+name: Expo Release
+description: Fingerprint-driven EAS iOS OTA or native TestFlight build
+author: Kristoffer Hansen
+
+inputs:
+  profile:
+    description: EAS build profile (also used as the default update channel)
+    required: false
+    default: production
+  operation:
+    description: deploy, force-native, retry-ota, republish-latest, or rollback-embedded
+    required: false
+    default: deploy
+  base:
+    description: Git base SHA for the impact diff. Defaults to github.event.before or HEAD^.
+    required: false
+    default: ''
+  head:
+    description: Git head SHA for the impact diff. Defaults to GITHUB_SHA.
+    required: false
+    default: ''
+  impact-paths:
+    description: Comma-separated repo-root paths that count as an Expo change
+    required: false
+    default: apps/expo/
+  environment:
+    description: Optional EAS environment passed to eas update (e.g. production)
+    required: false
+    default: ''
+  channel:
+    description: EAS Update channel. Defaults to the profile name.
+    required: false
+    default: ''
+  platform:
+    description: Native platform
+    required: false
+    default: ios
+  auto-submit:
+    description: Pass --auto-submit on native builds
+    required: false
+    default: 'true'
+  working-directory:
+    description: Directory to run EAS commands from
+    required: false
+    default: apps/expo
+
+outputs:
+  action:
+    description: Decision action (skip, ota, build, build-in-progress)
+    value: ${{ steps.decision.outputs.action }}
+  fingerprint:
+    description: Current EAS fingerprint hash
+    value: ${{ steps.decision.outputs.fingerprint }}
+  build_id:
+    description: Matching EAS build id, if any
+    value: ${{ steps.decision.outputs.build_id }}
+  build_url:
+    description: Matching EAS build URL, if any
+    value: ${{ steps.decision.outputs.build_url }}
+  result:
+    description: Operate result (skipped, ota, native-build, recovery)
+    value: ${{ steps.operate.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide release action
+      id: decision
+      if: github.event_name == 'push' || inputs.operation == 'deploy' || inputs.operation == 'retry-ota'
+      working-directory: ${{ inputs.working-directory }}
+      shell: bash
+      env:
+        IGNORE_EXPO_IMPACT: ${{ inputs.operation == 'retry-ota' && 'true' || 'false' }}
+      run: |
+        BASE="${{ inputs.base }}"
+        if [[ -z "$BASE" ]]; then
+          BASE="${{ github.event.before }}"
+        fi
+        if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]]; then
+          BASE="$(git rev-parse HEAD^)"
+        fi
+        HEAD="${{ inputs.head }}"
+        if [[ -z "$HEAD" ]]; then
+          HEAD="$GITHUB_SHA"
+        fi
+        args=(
+          decide
+          --base "$BASE"
+          --head "$HEAD"
+          --profile "${{ inputs.profile }}"
+          --platform "${{ inputs.platform }}"
+          --impact-paths "${{ inputs.impact-paths }}"
+        )
+        if [[ "$IGNORE_EXPO_IMPACT" == "true" ]]; then
+          args+=(--ignore-expo-impact true)
+        fi
+        bun "${{ github.action_path }}/src/cli.ts" "${args[@]}"
+
+    - name: Operate release
+      id: operate
+      working-directory: ${{ inputs.working-directory }}
+      shell: bash
+      env:
+        ACTION: ${{ steps.decision.outputs.action || 'skip' }}
+      run: |
+        args=(
+          operate
+          --profile "${{ inputs.profile }}"
+          --action "$ACTION"
+          --operation "${{ inputs.operation }}"
+          --platform "${{ inputs.platform }}"
+          --auto-submit "${{ inputs.auto-submit }}"
+        )
+        CHANNEL="${{ inputs.channel }}"
+        if [[ -n "$CHANNEL" ]]; then
+          args+=(--channel "$CHANNEL")
+        fi
+        ENVIRONMENT="${{ inputs.environment }}"
+        if [[ -n "$ENVIRONMENT" ]]; then
+          args+=(--environment "$ENVIRONMENT")
+        fi
+        bun "${{ github.action_path }}/src/cli.ts" "${args[@]}"
+
+    - name: Publish job summary
+      if: always()
+      shell: bash
+      env:
+        ACTION: ${{ steps.decision.outcome == 'success' && steps.decision.outputs.action || '' }}
+        RESULT: ${{ steps.operate.outputs.result || 'did not run' }}
+        OPERATION: ${{ inputs.operation }}
+        PROFILE: ${{ inputs.profile }}
+        FINGERPRINT: ${{ steps.decision.outputs.fingerprint }}
+        MATCHING_BUILD: ${{ steps.decision.outputs.build_url || steps.decision.outputs.build_id }}
+      run: |
+        {
+          echo "## ${PROFILE} iOS release"
+          echo ""
+          echo "- Operation: \`$OPERATION\`"
+          echo "- Result: \`$RESULT\`"
+          if [[ -n "$ACTION" ]]; then
+            echo "- Decision: \`$ACTION\`"
+            echo "- Fingerprint: \`${FINGERPRINT:-none}\`"
+            echo "- Matching build: ${MATCHING_BUILD:-none}"
+          fi
+          echo "- New native builds upload automatically to TestFlight when auto-submit is enabled."
+        } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,63 @@
+{
+	"name": "expo-release",
+	"version": "1.0.0",
+	"description": "Fingerprint-driven Expo EAS release: OTA update or native iOS TestFlight build",
+	"type": "module",
+	"module": "./dist/index.js",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/HansKristoffer/expo-release.git"
+	},
+	"author": "Kristoffer Hansen",
+	"keywords": [
+		"expo",
+		"eas",
+		"eas-update",
+		"fingerprint",
+		"ota",
+		"testflight",
+		"github-actions"
+	],
+	"engines": {
+		"bun": ">=1.0.0"
+	},
+	"files": [
+		"src/**/*.ts",
+		"dist",
+		"action.yml",
+		"!src/**/*.test.ts"
+	],
+	"bin": {
+		"expo-release": "./src/cli.ts"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"bun": "./src/index.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "bun run build:js && bun run build:types",
+		"build:js": "bun build ./src/index.ts ./src/cli.ts --outdir ./dist --target bun --packages external",
+		"build:types": "tsgo -p tsconfig.build.json",
+		"prepublishOnly": "bun run build",
+		"publish:patch": "npm version patch && npm publish",
+		"publish:minor": "npm version minor && npm publish",
+		"publish:major": "npm version major && npm publish",
+		"test": "bun test",
+		"lint": "bun run typecheck && bun biome check",
+		"lint:write": "bun run typecheck && bun biome check --write",
+		"typecheck": "tsgo --noEmit"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.6",
+		"@types/bun": "latest",
+		"@typescript/native-preview": "^7.0.0-dev.20260306.1",
+		"typescript": "^5.7.0"
+	}
+}
