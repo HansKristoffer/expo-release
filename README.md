@@ -17,6 +17,42 @@ decide — git diff + eas fingerprint:generate + eas build:list
      └─ no matching native build → eas build --auto-submit --no-wait
 ```
 
+## Set up with AI
+
+Copy the prompt below into Cursor, Claude Code, or another coding agent to wire up expo-release in your existing repo.
+
+```
+Integrate expo-release (https://github.com/HansKristoffer/expo-release) into this codebase for fingerprint-driven Expo EAS releases.
+
+Goal: on push to the main deploy branch, when Expo-related paths change, automatically publish an OTA update if a finished native build matches the current fingerprint, or queue a native store build (with auto-submit) when no matching build exists.
+
+Do the following in this repo:
+
+1. Inspect the repo layout: find the Expo app directory, monorepo package manager (bun/npm/pnpm), lockfile location, EAS profiles in eas.json, and any app.config.ts variant env vars (e.g. APP_VARIANT, SECRETS_ENV, APS_ENVIRONMENT).
+
+2. Ensure the Expo app is ready for fingerprint-based updates:
+   - runtimeVersion: { policy: 'fingerprint' } in app config
+   - expo-updates installed and configured
+   - channel set on each EAS build profile we deploy
+   - submit config in eas.json if we use auto-submit (iOS ascAppId, Android serviceAccountKeyPath)
+
+3. Add .github/workflows/expo-release.yml using the HansKristoffer/expo-release@v2 composite action. Adapt consumer-specific values:
+   - paths filter: Expo app dir, shared packages that affect the native bundle, and lockfile if native deps should trigger a release
+   - working-directory and impact-paths pointing at the Expo app
+   - profile, environment, and channel for each deploy target
+   - env vars required by app.config.ts on the action step (APP_VARIANT, etc.)
+   - workflow_dispatch inputs for force-native, retry-ota, republish, rollback-embedded
+   - fetch-depth: 0 on checkout, Bun/Node setup, dependency install, expo/expo-github-action with pinned eas-version and EXPO_TOKEN secret
+
+4. Document that EXPO_TOKEN must be added as a GitHub secret, and that the first run on a new fingerprint always queues a native build.
+
+5. If we have staging + production (or multiple profiles), use separate jobs or a matrix with profile-specific concurrency groups.
+
+6. Do not change unrelated CI. Keep the diff minimal and match existing workflow conventions in this repo.
+
+Reference the upstream README for full input/output docs and recovery operations. Ask me only if a required value (Expo app path, deploy branch, profile names) cannot be inferred from the repo.
+```
+
 ## Install
 
 ### GitHub Action
