@@ -22,12 +22,15 @@ export type OperationInput = {
 	environment?: string
 	platform: ReleasePlatform
 	autoSubmit: boolean
+	preUpdate?: string
+	postUpdate?: string
+	updateExtraArgs?: string
 }
 
 type CommandRunner = (command: string[]) => Promise<void>
 
 const OPERATE_USAGE =
-	'Usage: expo-release operate --profile <profile> --action <action> --operation <operation> [--channel <channel>] [--environment <env>] [--platform ios] [--auto-submit true]'
+	'Usage: expo-release operate --profile <profile> --action <action> --operation <operation> [--channel <channel>] [--environment <env>] [--platform ios] [--auto-submit true] [--pre-update <cmd>] [--post-update <cmd>] [--update-extra-args <args>]'
 
 async function run(command: string[]): Promise<void> {
 	const child = Bun.spawn(command, { stdout: 'inherit', stderr: 'inherit' })
@@ -42,16 +45,31 @@ function messageFor(profile: string): string {
 	return `${profile} ${sha}`
 }
 
+async function runHook(
+	command: string | undefined,
+	commandRunner: CommandRunner
+) {
+	if (!command) return
+	await commandRunner(['bash', '-lc', command])
+}
+
+function extraUpdateArgs(value: string | undefined): string[] {
+	return value?.split(/\s+/).filter(Boolean) ?? []
+}
+
 async function publishUpdate(
 	input: OperationInput,
 	commandRunner: CommandRunner
 ) {
+	await runHook(input.preUpdate, commandRunner)
 	const command = ['bunx', 'eas', 'update', '--channel', input.channel]
 	if (input.environment) {
 		command.push('--environment', input.environment)
 	}
 	command.push('--message', messageFor(input.profile), '--non-interactive')
+	command.push(...extraUpdateArgs(input.updateExtraArgs))
 	await commandRunner(command)
+	await runHook(input.postUpdate, commandRunner)
 }
 
 async function queueNativeBuild(
@@ -149,6 +167,11 @@ function parseAction(value: string | undefined): ReleaseAction {
 	throw new Error(OPERATE_USAGE)
 }
 
+function optionalString(value: string | undefined): string | undefined {
+	const trimmed = value?.trim()
+	return trimmed ? trimmed : undefined
+}
+
 function parseOperation(value: string | undefined): Operation {
 	if (
 		value === 'deploy' ||
@@ -176,7 +199,10 @@ export function parseOperateArgs(args: string[]): OperationInput {
 		channel: values.get('channel') ?? profile,
 		environment: values.get('environment'),
 		platform: parsePlatform(values.get('platform')),
-		autoSubmit: parseBoolean(values.get('auto-submit'), true)
+		autoSubmit: parseBoolean(values.get('auto-submit'), true),
+		preUpdate: optionalString(values.get('pre-update')),
+		postUpdate: optionalString(values.get('post-update')),
+		updateExtraArgs: optionalString(values.get('update-extra-args'))
 	}
 }
 

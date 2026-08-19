@@ -27,7 +27,33 @@ describe('parseOperateArgs', () => {
 			channel: 'staging',
 			environment: undefined,
 			platform: 'ios',
-			autoSubmit: true
+			autoSubmit: true,
+			preUpdate: undefined,
+			postUpdate: undefined,
+			updateExtraArgs: undefined
+		})
+	})
+
+	test('parses OTA hook commands and extra update args', () => {
+		expect(
+			parseOperateArgs([
+				'--profile',
+				'production',
+				'--action',
+				'ota',
+				'--operation',
+				'deploy',
+				'--pre-update',
+				'bun scripts/release/export-hermes.ts',
+				'--update-extra-args',
+				'--input-dir dist --skip-bundler',
+				'--post-update',
+				'bunx posthog-cli hermes upload --directory dist'
+			])
+		).toMatchObject({
+			preUpdate: 'bun scripts/release/export-hermes.ts',
+			updateExtraArgs: '--input-dir dist --skip-bundler',
+			postUpdate: 'bunx posthog-cli hermes upload --directory dist'
 		})
 	})
 
@@ -185,6 +211,105 @@ describe('operateRelease', () => {
 
 		expect(result).toBe('skipped')
 		expect(commands).toHaveLength(0)
+	})
+
+	test('runs pre-update, extra args, and post-update around eas update', async () => {
+		const commands: string[][] = []
+		const result = await operateRelease(
+			{
+				...productionOperate,
+				action: 'ota',
+				operation: 'deploy',
+				preUpdate: 'bun scripts/release/export-hermes.ts',
+				updateExtraArgs: '--input-dir dist --skip-bundler',
+				postUpdate: 'bunx posthog-cli hermes upload --directory dist'
+			},
+			async (command) => {
+				commands.push(command)
+			}
+		)
+
+		expect(result).toBe('ota')
+		expect(commands).toEqual([
+			['bash', '-lc', 'bun scripts/release/export-hermes.ts'],
+			expect.arrayContaining([
+				'eas',
+				'update',
+				'--input-dir',
+				'dist',
+				'--skip-bundler'
+			]),
+			['bash', '-lc', 'bunx posthog-cli hermes upload --directory dist']
+		])
+	})
+
+	test('runs OTA hooks on retry-ota', async () => {
+		const commands: string[][] = []
+		await operateRelease(
+			{
+				...productionOperate,
+				action: 'build',
+				operation: 'retry-ota',
+				preUpdate: 'bun scripts/release/export-hermes.ts'
+			},
+			async (command) => {
+				commands.push(command)
+			}
+		)
+
+		expect(commands[0]).toEqual([
+			'bash',
+			'-lc',
+			'bun scripts/release/export-hermes.ts'
+		])
+		expect(commands[1]).toContain('update')
+	})
+
+	test('does not run OTA hooks for skip, native build, or recovery', async () => {
+		const hooks = {
+			preUpdate: 'bun scripts/release/export-hermes.ts',
+			postUpdate: 'bunx posthog-cli hermes upload --directory dist',
+			updateExtraArgs: '--skip-bundler'
+		}
+
+		for (const input of [
+			{ action: 'skip' as const, operation: 'deploy' as const },
+			{ action: 'build' as const, operation: 'deploy' as const },
+			{ action: 'skip' as const, operation: 'rollback-embedded' as const }
+		]) {
+			const commands: string[][] = []
+			await operateRelease(
+				{ ...productionOperate, ...hooks, ...input },
+				async (command) => {
+					commands.push(command)
+				}
+			)
+			expect(commands.some((command) => command[0] === 'bash')).toBe(false)
+			expect(commands.flat()).not.toContain('--skip-bundler')
+		}
+	})
+
+	test('skips post-update when eas update fails', async () => {
+		const commands: string[][] = []
+		await expect(
+			operateRelease(
+				{
+					...productionOperate,
+					action: 'ota',
+					operation: 'deploy',
+					preUpdate: 'bun scripts/release/export-hermes.ts',
+					postUpdate: 'bunx posthog-cli hermes upload --directory dist'
+				},
+				async (command) => {
+					commands.push(command)
+					if (command.includes('update')) {
+						throw new Error('eas update failed')
+					}
+				}
+			)
+		).rejects.toThrow('eas update failed')
+		expect(commands).toHaveLength(2)
+		expect(commands[1]).toContain('update')
 	})
 
 	test('queues a native TestFlight build when no matching fingerprint exists', async () => {

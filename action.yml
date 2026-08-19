@@ -51,6 +51,18 @@ inputs:
     description: Directory to run EAS commands from
     required: false
     default: apps/expo
+  pre-update:
+    description: Shell command to run before eas update (OTA path only)
+    required: false
+    default: ''
+  post-update:
+    description: Shell command to run after a successful eas update (OTA path only)
+    required: false
+    default: ''
+  update-extra-args:
+    description: Extra tokens appended to eas update (e.g. --input-dir dist --skip-bundler)
+    required: false
+    default: ''
 
 outputs:
   action:
@@ -135,6 +147,18 @@ runs:
         ENVIRONMENT="${{ inputs.environment }}"
         if [[ -n "$ENVIRONMENT" ]]; then
           args+=(--environment "$ENVIRONMENT")
+        fi
+        PRE_UPDATE="${{ inputs.pre-update }}"
+        if [[ -n "$PRE_UPDATE" ]]; then
+          args+=(--pre-update "$PRE_UPDATE")
+        fi
+        POST_UPDATE="${{ inputs.post-update }}"
+        if [[ -n "$POST_UPDATE" ]]; then
+          args+=(--post-update "$POST_UPDATE")
+        fi
+        UPDATE_EXTRA_ARGS="${{ inputs.update-extra-args }}"
+        if [[ -n "$UPDATE_EXTRA_ARGS" ]]; then
+          args+=(--update-extra-args "$UPDATE_EXTRA_ARGS")
         fi
         bun "${{ github.action_path }}/src/cli.ts" "${args[@]}"
 

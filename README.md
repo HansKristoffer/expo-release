@@ -163,6 +163,9 @@ jobs:
 | `platform` | `ios` | `ios` or `android` |
 | `auto-submit` | `true` | Native builds use `--auto-submit` |
 | `working-directory` | `apps/expo` | Where `eas` runs |
+| `pre-update` | _(empty)_ | Shell command before `eas update` (OTA only) |
+| `post-update` | _(empty)_ | Shell command after a successful `eas update` (OTA only) |
+| `update-extra-args` | _(empty)_ | Extra tokens appended to `eas update` |
 
 ### Action outputs
 
@@ -206,6 +209,31 @@ bun "${{ github.action_path }}/src/cli.ts" decide \
 
 `Bun.spawn` inherits process env. Set variant keys on the decide step when the fingerprint must match a specific binary (for example staging vs production). Apps that do not branch on those variables set nothing extra.
 
+### OTA hooks
+
+`pre-update`, `post-update`, and `update-extra-args` run only on the OTA path (`deploy` + `ota`/`build-in-progress`, and `retry-ota`). Skip, native builds, republish, and rollback ignore them. Hook commands inherit process env. A non-zero hook exit fails operate; `post-update` does not run if `eas update` fails.
+
+gey-mono and gusify omit these inputs. Staging / PR-preview OTAs that should use a normal `eas update` also omit them.
+
+Production apps that export Hermes maps first (lullu) set them only on the production operate step:
+
+```yaml
+- uses: HansKristoffer/expo-release@v1
+  with:
+    command: release
+    profile: production
+    environment: production
+    pre-update: bun scripts/release/export-hermes.ts
+    update-extra-args: --input-dir dist --skip-bundler
+    post-update: bunx posthog-cli hermes upload --directory dist
+  env:
+    APP_VARIANT: production
+    SECRETS_ENV: production
+    APS_ENVIRONMENT: production
+```
+
+`export-hermes.ts` is app-owned (typically `expo export --source-maps external` plus a Hermes `.map` check). Staging stays a default `eas update`.
+
 ### Recovery operations
 
 | Operation | Effect |
@@ -235,7 +263,10 @@ expo-release operate \
   --action <skip|ota|build|build-in-progress> \
   --operation <deploy|force-native|retry-ota|republish-latest|rollback-embedded> \
   [--channel production] [--environment production] \
-  [--platform ios] [--auto-submit true]
+  [--platform ios] [--auto-submit true] \
+  [--pre-update "bun scripts/release/export-hermes.ts"] \
+  [--update-extra-args "--input-dir dist --skip-bundler"] \
+  [--post-update "bunx posthog-cli hermes upload --directory dist"]
 ```
 
 `release` is decide + operate (same as the action default). `decide` prints JSON including `action` and `deployType`. When `GITHUB_OUTPUT` is set, decide writes `action`, `deploy_type`, `changed`, `fingerprint`, `build_id`, `build_url`. Operate writes `result`.
