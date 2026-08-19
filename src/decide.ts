@@ -10,6 +10,8 @@ import { appendGitHubOutput } from './github-output'
 
 export type ReleaseAction = 'skip' | 'ota' | 'build' | 'build-in-progress'
 
+export type DeployType = 'none' | 'ota' | 'native'
+
 type EASBuildStatus =
 	| 'finished'
 	| 'in-progress'
@@ -27,6 +29,7 @@ export type EASBuild = {
 
 export type ReleaseDecision = {
 	action: ReleaseAction
+	deployType: DeployType
 	changedFiles: string[]
 	fingerprint: string | null
 	build: EASBuild | null
@@ -166,6 +169,22 @@ export function hasExpoImpact(
 	return paths.some((path) => isExpoImpactPath(path, impactPaths))
 }
 
+export function deployTypeForAction(action: ReleaseAction): DeployType {
+	switch (action) {
+		case 'skip':
+			return 'none'
+		case 'ota':
+		case 'build-in-progress':
+			return 'ota'
+		case 'build':
+			return 'native'
+		default: {
+			const _exhaustive: never = action
+			throw new Error(`Unsupported action: ${_exhaustive}`)
+		}
+	}
+}
+
 export function resolveBuildAction(builds: EASBuild[]): {
 	action: Exclude<ReleaseAction, 'skip'>
 	build: EASBuild | null
@@ -240,6 +259,7 @@ export async function decideRelease(
 	) {
 		return {
 			action: 'skip',
+			deployType: 'none',
 			changedFiles,
 			fingerprint: null,
 			build: null
@@ -265,6 +285,7 @@ export async function decideRelease(
 
 	return {
 		action: resolved.action,
+		deployType: deployTypeForAction(resolved.action),
 		changedFiles,
 		fingerprint,
 		build: resolved.build
@@ -293,6 +314,7 @@ export function parseDecideArgs(args: string[]): DecisionInput {
 export async function writeDecideGitHubOutput(decision: ReleaseDecision) {
 	await appendGitHubOutput([
 		`action=${decision.action}`,
+		`deploy_type=${decision.deployType}`,
 		`changed=${String(decision.action !== 'skip')}`,
 		`fingerprint=${decision.fingerprint ?? ''}`,
 		`build_id=${decision.build?.id ?? ''}`,

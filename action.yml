@@ -3,6 +3,10 @@ description: Fingerprint-driven EAS iOS OTA or native TestFlight build
 author: Kristoffer Hansen
 
 inputs:
+  command:
+    description: release (decide + operate), decide only, or operate only
+    required: false
+    default: release
   profile:
     description: EAS build profile (also used as the default update channel)
     required: false
@@ -11,6 +15,10 @@ inputs:
     description: deploy, force-native, retry-ota, republish-latest, or rollback-embedded
     required: false
     default: deploy
+  action:
+    description: Decision action when command is operate (skip, ota, build, build-in-progress)
+    required: false
+    default: skip
   base:
     description: Git base SHA for the impact diff. Defaults to github.event.before or HEAD^.
     required: false
@@ -48,6 +56,9 @@ outputs:
   action:
     description: Decision action (skip, ota, build, build-in-progress)
     value: ${{ steps.decision.outputs.action }}
+  deploy_type:
+    description: Stable PR-check type (none, ota, native)
+    value: ${{ steps.decision.outputs.deploy_type }}
   fingerprint:
     description: Current EAS fingerprint hash
     value: ${{ steps.decision.outputs.fingerprint }}
@@ -66,7 +77,12 @@ runs:
   steps:
     - name: Decide release action
       id: decision
-      if: github.event_name == 'push' || inputs.operation == 'deploy' || inputs.operation == 'retry-ota'
+      if: >
+        inputs.command == 'decide' ||
+        (inputs.command == 'release' &&
+          (github.event_name == 'push' ||
+            inputs.operation == 'deploy' ||
+            inputs.operation == 'retry-ota'))
       working-directory: ${{ inputs.working-directory }}
       shell: bash
       env:
@@ -98,10 +114,11 @@ runs:
 
     - name: Operate release
       id: operate
+      if: inputs.command == 'release' || inputs.command == 'operate'
       working-directory: ${{ inputs.working-directory }}
       shell: bash
       env:
-        ACTION: ${{ steps.decision.outputs.action || 'skip' }}
+        ACTION: ${{ inputs.command == 'operate' && inputs.action || steps.decision.outputs.action || 'skip' }}
       run: |
         args=(
           operate
@@ -126,21 +143,27 @@ runs:
       shell: bash
       env:
         ACTION: ${{ steps.decision.outcome == 'success' && steps.decision.outputs.action || '' }}
+        DEPLOY_TYPE: ${{ steps.decision.outputs.deploy_type }}
         RESULT: ${{ steps.operate.outputs.result || 'did not run' }}
+        COMMAND: ${{ inputs.command }}
         OPERATION: ${{ inputs.operation }}
         PROFILE: ${{ inputs.profile }}
         FINGERPRINT: ${{ steps.decision.outputs.fingerprint }}
         MATCHING_BUILD: ${{ steps.decision.outputs.build_url || steps.decision.outputs.build_id }}
       run: |
         {
-          echo "## ${PROFILE} iOS release"
+          echo "## ${PROFILE} iOS ${COMMAND}"
           echo ""
+          echo "- Command: \`$COMMAND\`"
           echo "- Operation: \`$OPERATION\`"
           echo "- Result: \`$RESULT\`"
           if [[ -n "$ACTION" ]]; then
             echo "- Decision: \`$ACTION\`"
+            echo "- Deploy type: \`${DEPLOY_TYPE:-none}\`"
             echo "- Fingerprint: \`${FINGERPRINT:-none}\`"
             echo "- Matching build: ${MATCHING_BUILD:-none}"
           fi
-          echo "- New native builds upload automatically to TestFlight when auto-submit is enabled."
+          if [[ "$COMMAND" == "release" ]]; then
+            echo "- New native builds upload automatically to TestFlight when auto-submit is enabled."
+          fi
         } >> "$GITHUB_STEP_SUMMARY"

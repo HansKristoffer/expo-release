@@ -1,6 +1,6 @@
 {
 	"name": "expo-release",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "Fingerprint-driven Expo EAS release: OTA update or native iOS TestFlight build",
 	"type": "module",
 	"module": "./dist/index.js",

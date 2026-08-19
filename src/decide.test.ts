@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import {
 	decideRelease,
+	deployTypeForAction,
 	type EASBuild,
 	hasExpoImpact,
 	parseDecideArgs,
-	resolveBuildAction
+	resolveBuildAction,
+	writeDecideGitHubOutput
 } from './decide'
 
 function productionDecision(
@@ -75,6 +77,21 @@ describe('parseDecideArgs', () => {
 	})
 })
 
+describe('deployTypeForAction', () => {
+	test('maps skip to none', () => {
+		expect(deployTypeForAction('skip')).toBe('none')
+	})
+
+	test('maps ota and build-in-progress to ota', () => {
+		expect(deployTypeForAction('ota')).toBe('ota')
+		expect(deployTypeForAction('build-in-progress')).toBe('ota')
+	})
+
+	test('maps build to native', () => {
+		expect(deployTypeForAction('build')).toBe('native')
+	})
+})
+
 describe('resolveBuildAction', () => {
 	test('prefers a finished matching build over active builds', () => {
 		const builds: EASBuild[] = [
@@ -129,6 +146,7 @@ describe('decideRelease', () => {
 		)
 
 		expect(decision.action).toBe('skip')
+		expect(decision.deployType).toBe('none')
 		expect(decision.fingerprint).toBeNull()
 		expect(calls).toHaveLength(1)
 	})
@@ -159,6 +177,7 @@ describe('decideRelease', () => {
 
 		expect(decision).toMatchObject({
 			action: 'ota',
+			deployType: 'ota',
 			fingerprint,
 			build: {
 				id: 'build_123',
@@ -192,8 +211,58 @@ describe('decideRelease', () => {
 
 		expect(decision).toMatchObject({
 			action: 'build-in-progress',
+			deployType: 'ota',
 			build: { id: 'queued', status: 'in-queue' }
 		})
+	})
+
+	test('returns native when no matching build exists', async () => {
+		const responses = [
+			'apps/expo/src/app/_layout.tsx\n',
+			JSON.stringify({ hash: 'fingerprint' }),
+			'[]',
+			'[]',
+			'[]',
+			'[]',
+			'[]'
+		]
+		const decision = await decideRelease(productionDecision(), async () => {
+			const response = responses.shift()
+			if (!response) throw new Error('Unexpected command')
+			return response
+		})
+
+		expect(decision).toMatchObject({
+			action: 'build',
+			deployType: 'native',
+			fingerprint: 'fingerprint',
+			build: null
+		})
+	})
+
+	test('writes deploy_type for PR checks', async () => {
+		const previous = process.env.GITHUB_OUTPUT
+		const outputPath = `${import.meta.dir}/.github-output-${crypto.randomUUID()}`
+		process.env.GITHUB_OUTPUT = outputPath
+		try {
+			await writeDecideGitHubOutput({
+				action: 'build-in-progress',
+				deployType: 'ota',
+				changedFiles: ['apps/expo/src/app/_layout.tsx'],
+				fingerprint: 'abc',
+				build: { id: 'queued', status: 'in-queue' }
+			})
+			expect(await Bun.file(outputPath).text()).toContain('deploy_type=ota')
+		} finally {
+			if (previous === undefined) {
+				delete process.env.GITHUB_OUTPUT
+			} else {
+				process.env.GITHUB_OUTPUT = previous
+			}
+			await Bun.file(outputPath)
+				.unlink()
+				.catch(() => undefined)
+		}
 	})
 
 	test('fails clearly when the EAS fingerprint output is malformed', async () => {

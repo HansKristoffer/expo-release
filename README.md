@@ -140,6 +140,7 @@ jobs:
       - name: Expo release
         uses: HansKristoffer/expo-release@v1
         with:
+          command: release                 # default: decide + operate
           profile: production
           operation: ${{ github.event.inputs.operation || 'deploy' }}
           environment: production          # consumer: omit if eas update should not set --environment
@@ -151,8 +152,10 @@ jobs:
 
 | Input | Default | Notes |
 |-------|---------|--------|
+| `command` | `release` | `release` (decide + operate), `decide` (PR checks), or `operate` |
 | `profile` | `production` | EAS build profile; default update channel |
 | `operation` | `deploy` | See recovery operations below |
+| `action` | `skip` | Used only when `command` is `operate` |
 | `base` / `head` | event before / `GITHUB_SHA` | Git range for the impact diff |
 | `impact-paths` | `apps/expo/` | Comma-separated repo-root prefixes |
 | `environment` | _(empty)_ | Passed to `eas update` only when set |
@@ -160,6 +163,48 @@ jobs:
 | `platform` | `ios` | `ios` or `android` |
 | `auto-submit` | `true` | Native builds use `--auto-submit` |
 | `working-directory` | `apps/expo` | Where `eas` runs |
+
+### Action outputs
+
+| Output | Notes |
+|--------|--------|
+| `action` | Internal decision: `skip`, `ota`, `build`, `build-in-progress` |
+| `deploy_type` | Stable PR-check type: `none`, `ota`, `native` |
+| `fingerprint` | Current EAS fingerprint hash |
+| `build_id` / `build_url` | Matching EAS build, if any |
+| `result` | Operate result (`skipped`, `ota`, `native-build`, `recovery`) |
+
+`deploy_type` maps `skip` → `none`, `ota` and `build-in-progress` → `ota`, and `build` → `native`.
+
+### PR checks (decide only)
+
+PR jobs should not operate. Use `command: decide` and comment or gate on `deploy_type`:
+
+```yaml
+- uses: HansKristoffer/expo-release@v1
+  id: decision
+  with:
+    command: decide
+    profile: pr-preview   # or production
+    base: ${{ steps.merge-base.outputs.sha }}
+    head: ${{ github.sha }}
+  env:
+    # optional — inherited by eas fingerprint:generate
+    APP_VARIANT: staging
+    SECRETS_ENV: staging
+    APS_ENVIRONMENT: production
+```
+
+Then use `${{ steps.decision.outputs.deploy_type }}` (`none` / `ota` / `native`).
+
+The CLI writes the same JSON to stdout, including `deployType`:
+
+```bash
+bun "${{ github.action_path }}/src/cli.ts" decide \
+  --base "$BASE" --head "$HEAD" --profile production
+```
+
+`Bun.spawn` inherits process env. Set variant keys on the decide step when the fingerprint must match a specific binary (for example staging vs production). Apps that do not branch on those variables set nothing extra.
 
 ### Recovery operations
 
@@ -174,6 +219,11 @@ jobs:
 ## CLI
 
 ```bash
+expo-release release \
+  --base <sha> --head <sha> --profile production \
+  [--platform ios] \
+  [--impact-paths apps/expo/,packages/conductor/]
+
 expo-release decide \
   --base <sha> --head <sha> --profile production \
   [--platform ios] \
@@ -188,7 +238,7 @@ expo-release operate \
   [--platform ios] [--auto-submit true]
 ```
 
-When `GITHUB_OUTPUT` is set, decide writes `action`, `changed`, `fingerprint`, `build_id`, `build_url`. Operate writes `result`.
+`release` is decide + operate (same as the action default). `decide` prints JSON including `action` and `deployType`. When `GITHUB_OUTPUT` is set, decide writes `action`, `deploy_type`, `changed`, `fingerprint`, `build_id`, `build_url`. Operate writes `result`.
 
 ```bash
 # local
