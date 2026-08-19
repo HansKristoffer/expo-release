@@ -1,0 +1,25 @@
+name: Release tags
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Move the major-version tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          major="${tag%%.*}"
+          git tag -f "$major" "$tag"
+          git push origin "$major" --force

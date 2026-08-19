@@ -1,5 +1,5 @@
 name: Expo Release
-description: Fingerprint-driven EAS iOS OTA or native TestFlight build
+description: Fingerprint-driven EAS OTA or native store build
 author: Kristoffer Hansen
 
 inputs:
@@ -12,15 +12,15 @@ inputs:
     required: false
     default: production
   operation:
-    description: deploy, force-native, retry-ota, republish-latest, or rollback-embedded
+    description: deploy, force-native, retry-ota, republish, or rollback-embedded
     required: false
     default: deploy
-  action:
-    description: Decision action when command is operate (skip, ota, build, build-in-progress)
+  deploy-type:
+    description: Decision type when command is operate (none, ota, native)
     required: false
-    default: skip
+    default: none
   base:
-    description: Git base SHA for the impact diff. Defaults to github.event.before or HEAD^.
+    description: Git base SHA for the impact diff. Defaults to github.event.before.
     required: false
     default: ''
   head:
@@ -32,7 +32,7 @@ inputs:
     required: false
     default: apps/expo/
   environment:
-    description: Optional EAS environment passed to eas update (e.g. production)
+    description: EAS environment passed to eas update. Required for Expo SDK 55+.
     required: false
     default: ''
   channel:
@@ -40,7 +40,7 @@ inputs:
     required: false
     default: ''
   platform:
-    description: Native platform
+    description: Native platform (ios or android)
     required: false
     default: ios
   auto-submit:
@@ -63,131 +63,100 @@ inputs:
     description: Extra tokens appended to eas update (e.g. --input-dir dist --skip-bundler)
     required: false
     default: ''
+  group:
+    description: Update group ID required by operation=republish
+    required: false
+    default: ''
+  runtime-version:
+    description: Runtime version for rollback-embedded. Defaults to the current fingerprint.
+    required: false
+    default: ''
+  message:
+    description: Override the generated eas update message
+    required: false
+    default: ''
+  dry-run:
+    description: Print mutating EAS commands without executing them
+    required: false
+    default: 'false'
 
 outputs:
-  action:
-    description: Decision action (skip, ota, build, build-in-progress)
-    value: ${{ steps.decision.outputs.action }}
   deploy_type:
     description: Stable PR-check type (none, ota, native)
-    value: ${{ steps.decision.outputs.deploy_type }}
+    value: ${{ steps.release.outputs.deploy_type }}
+  native_build_pending:
+    description: Whether a matching native build is still in progress
+    value: ${{ steps.release.outputs.native_build_pending }}
   fingerprint:
     description: Current EAS fingerprint hash
-    value: ${{ steps.decision.outputs.fingerprint }}
+    value: ${{ steps.release.outputs.fingerprint }}
   build_id:
     description: Matching EAS build id, if any
-    value: ${{ steps.decision.outputs.build_id }}
+    value: ${{ steps.release.outputs.build_id }}
   build_url:
     description: Matching EAS build URL, if any
-    value: ${{ steps.decision.outputs.build_url }}
+    value: ${{ steps.release.outputs.build_url }}
   result:
     description: Operate result (skipped, ota, native-build, recovery)
-    value: ${{ steps.operate.outputs.result }}
+    value: ${{ steps.release.outputs.result }}
 
 runs:
   using: composite
   steps:
-    - name: Decide release action
-      id: decision
-      if: >
-        inputs.command == 'decide' ||
-        (inputs.command == 'release' &&
-          (github.event_name == 'push' ||
-            inputs.operation == 'deploy' ||
-            inputs.operation == 'retry-ota'))
+    - name: Expo release
+      id: release
       working-directory: ${{ inputs.working-directory }}
       shell: bash
       env:
-        IGNORE_EXPO_IMPACT: ${{ inputs.operation == 'retry-ota' && 'true' || 'false' }}
-      run: |
-        BASE="${{ inputs.base }}"
-        if [[ -z "$BASE" ]]; then
-          BASE="${{ github.event.before }}"
-        fi
-        if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]]; then
-          BASE="$(git rev-parse HEAD^)"
-        fi
-        HEAD="${{ inputs.head }}"
-        if [[ -z "$HEAD" ]]; then
-          HEAD="$GITHUB_SHA"
-        fi
-        args=(
-          decide
-          --base "$BASE"
-          --head "$HEAD"
-          --profile "${{ inputs.profile }}"
-          --platform "${{ inputs.platform }}"
-          --impact-paths "${{ inputs.impact-paths }}"
-        )
-        if [[ "$IGNORE_EXPO_IMPACT" == "true" ]]; then
-          args+=(--ignore-expo-impact true)
-        fi
-        bun "${{ github.action_path }}/src/cli.ts" "${args[@]}"
-
-    - name: Operate release
-      id: operate
-      if: inputs.command == 'release' || inputs.command == 'operate'
-      working-directory: ${{ inputs.working-directory }}
-      shell: bash
-      env:
-        ACTION: ${{ inputs.command == 'operate' && inputs.action || steps.decision.outputs.action || 'skip' }}
-      run: |
-        args=(
-          operate
-          --profile "${{ inputs.profile }}"
-          --action "$ACTION"
-          --operation "${{ inputs.operation }}"
-          --platform "${{ inputs.platform }}"
-          --auto-submit "${{ inputs.auto-submit }}"
-        )
-        CHANNEL="${{ inputs.channel }}"
-        if [[ -n "$CHANNEL" ]]; then
-          args+=(--channel "$CHANNEL")
-        fi
-        ENVIRONMENT="${{ inputs.environment }}"
-        if [[ -n "$ENVIRONMENT" ]]; then
-          args+=(--environment "$ENVIRONMENT")
-        fi
-        PRE_UPDATE="${{ inputs.pre-update }}"
-        if [[ -n "$PRE_UPDATE" ]]; then
-          args+=(--pre-update "$PRE_UPDATE")
-        fi
-        POST_UPDATE="${{ inputs.post-update }}"
-        if [[ -n "$POST_UPDATE" ]]; then
-          args+=(--post-update "$POST_UPDATE")
-        fi
-        UPDATE_EXTRA_ARGS="${{ inputs.update-extra-args }}"
-        if [[ -n "$UPDATE_EXTRA_ARGS" ]]; then
-          args+=(--update-extra-args "$UPDATE_EXTRA_ARGS")
-        fi
-        bun "${{ github.action_path }}/src/cli.ts" "${args[@]}"
+        ACTION_PATH: ${{ github.action_path }}
+        EXPO_RELEASE_COMMAND: ${{ inputs.command }}
+        EXPO_RELEASE_PROFILE: ${{ inputs.profile }}
+        EXPO_RELEASE_OPERATION: ${{ inputs.operation }}
+        EXPO_RELEASE_DEPLOY_TYPE: ${{ inputs.deploy-type }}
+        EXPO_RELEASE_BASE: ${{ inputs.base }}
+        EXPO_RELEASE_HEAD: ${{ inputs.head }}
+        EXPO_RELEASE_IMPACT_PATHS: ${{ inputs.impact-paths }}
+        EXPO_RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+        EXPO_RELEASE_CHANNEL: ${{ inputs.channel }}
+        EXPO_RELEASE_PLATFORM: ${{ inputs.platform }}
+        EXPO_RELEASE_AUTO_SUBMIT: ${{ inputs.auto-submit }}
+        EXPO_RELEASE_PRE_UPDATE: ${{ inputs.pre-update }}
+        EXPO_RELEASE_POST_UPDATE: ${{ inputs.post-update }}
+        EXPO_RELEASE_UPDATE_EXTRA_ARGS: ${{ inputs.update-extra-args }}
+        EXPO_RELEASE_GROUP: ${{ inputs.group }}
+        EXPO_RELEASE_RUNTIME_VERSION: ${{ inputs.runtime-version }}
+        EXPO_RELEASE_MESSAGE: ${{ inputs.message }}
+        EXPO_RELEASE_DRY_RUN: ${{ inputs.dry-run }}
+        GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+      run: bun "$ACTION_PATH/src/cli.ts"
 
     - name: Publish job summary
       if: always()
       shell: bash
       env:
-        ACTION: ${{ steps.decision.outcome == 'success' && steps.decision.outputs.action || '' }}
-        DEPLOY_TYPE: ${{ steps.decision.outputs.deploy_type }}
-        RESULT: ${{ steps.operate.outputs.result || 'did not run' }}
         COMMAND: ${{ inputs.command }}
         OPERATION: ${{ inputs.operation }}
         PROFILE: ${{ inputs.profile }}
-        FINGERPRINT: ${{ steps.decision.outputs.fingerprint }}
-        MATCHING_BUILD: ${{ steps.decision.outputs.build_url || steps.decision.outputs.build_id }}
+        PLATFORM: ${{ inputs.platform }}
+        DEPLOY_TYPE: ${{ steps.release.outputs.deploy_type }}
+        RESULT: ${{ steps.release.outputs.result || 'did not run' }}
+        FINGERPRINT: ${{ steps.release.outputs.fingerprint }}
+        MATCHING_BUILD: ${{ steps.release.outputs.build_url || steps.release.outputs.build_id }}
+        NATIVE_PENDING: ${{ steps.release.outputs.native_build_pending }}
       run: |
         {
-          echo "## ${PROFILE} iOS ${COMMAND}"
+          echo "## ${PROFILE} ${PLATFORM} ${COMMAND}"
           echo ""
           echo "- Command: \`$COMMAND\`"
           echo "- Operation: \`$OPERATION\`"
           echo "- Result: \`$RESULT\`"
-          if [[ -n "$ACTION" ]]; then
-            echo "- Decision: \`$ACTION\`"
-            echo "- Deploy type: \`${DEPLOY_TYPE:-none}\`"
+          if [[ -n "$DEPLOY_TYPE" ]]; then
+            echo "- Deploy type: \`$DEPLOY_TYPE\`"
+            echo "- Native build pending: \`${NATIVE_PENDING:-false}\`"
             echo "- Fingerprint: \`${FINGERPRINT:-none}\`"
             echo "- Matching build: ${MATCHING_BUILD:-none}"
           fi
           if [[ "$COMMAND" == "release" ]]; then
-            echo "- New native builds upload automatically to TestFlight when auto-submit is enabled."
+            echo "- New native builds are submitted automatically when auto-submit is enabled (TestFlight on iOS, Play on Android)."
           fi
         } >> "$GITHUB_STEP_SUMMARY"

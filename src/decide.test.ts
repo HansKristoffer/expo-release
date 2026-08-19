@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
 	decideRelease,
-	deployTypeForAction,
 	type EASBuild,
 	hasExpoImpact,
-	parseDecideArgs,
-	resolveBuildAction,
+	isExpoImpactPath,
+	parseBuildList,
+	resolveBuildDecision,
 	writeDecideGitHubOutput
 } from './decide'
 
@@ -20,6 +20,17 @@ function productionDecision(
 		impactPaths: ['apps/expo/'],
 		...overrides
 	}
+}
+
+const finishedBuild = {
+	id: 'build_123',
+	status: 'FINISHED',
+	app: {
+		slug: 'lullu',
+		ownerAccount: { name: 'lullu' }
+	},
+	fingerprint: { hash: 'f'.repeat(64) },
+	runtime: { version: '1.0.0' }
 }
 
 describe('hasExpoImpact', () => {
@@ -38,61 +49,49 @@ describe('hasExpoImpact', () => {
 		)
 		expect(hasExpoImpact(['packages/utils/src/index.ts'], paths)).toBe(false)
 	})
-})
 
-describe('parseDecideArgs', () => {
-	test('defaults platform and impact paths', () => {
-		expect(
-			parseDecideArgs([
-				'--base',
-				'abc',
-				'--head',
-				'def',
-				'--profile',
-				'staging'
-			])
-		).toEqual({
-			base: 'abc',
-			head: 'def',
-			profile: 'staging',
-			platform: 'ios',
-			impactPaths: ['apps/expo/'],
-			ignoreExpoImpact: false
-		})
-	})
-
-	test('parses comma-separated impact paths', () => {
-		expect(
-			parseDecideArgs([
-				'--base',
-				'abc',
-				'--head',
-				'def',
-				'--profile',
-				'production',
-				'--impact-paths',
-				'apps/expo/,packages/conductor/'
-			]).impactPaths
-		).toEqual(['apps/expo/', 'packages/conductor/'])
+	test('does not treat apps/expo-old as apps/expo', () => {
+		expect(isExpoImpactPath('apps/expo-old/src/index.ts', ['apps/expo'])).toBe(
+			false
+		)
+		expect(isExpoImpactPath('apps/expo/src/index.ts', ['apps/expo'])).toBe(true)
+		expect(isExpoImpactPath('apps/expo', ['apps/expo/'])).toBe(true)
 	})
 })
 
-describe('deployTypeForAction', () => {
-	test('maps skip to none', () => {
-		expect(deployTypeForAction('skip')).toBe('none')
+describe('parseBuildList', () => {
+	test('constructs the dashboard URL and captures fingerprint fields', () => {
+		expect(parseBuildList(JSON.stringify([finishedBuild]))).toEqual([
+			{
+				id: 'build_123',
+				status: 'finished',
+				buildUrl:
+					'https://expo.dev/accounts/lullu/projects/lullu/builds/build_123',
+				fingerprint: 'f'.repeat(64),
+				runtimeVersion: '1.0.0'
+			}
+		])
 	})
 
-	test('maps ota and build-in-progress to ota', () => {
-		expect(deployTypeForAction('ota')).toBe('ota')
-		expect(deployTypeForAction('build-in-progress')).toBe('ota')
-	})
-
-	test('maps build to native', () => {
-		expect(deployTypeForAction('build')).toBe('native')
+	test('skips unknown statuses instead of throwing', () => {
+		const warning = process.stderr.write
+		const writes: string[] = []
+		process.stderr.write = ((chunk: string) => {
+			writes.push(chunk)
+			return true
+		}) as typeof process.stderr.write
+		try {
+			expect(
+				parseBuildList(JSON.stringify([{ id: 'x', status: 'SOMETHING_NEW' }]))
+			).toEqual([])
+			expect(writes.join('')).toContain('unsupported status')
+		} finally {
+			process.stderr.write = warning
+		}
 	})
 })
 
-describe('resolveBuildAction', () => {
+describe('resolveBuildDecision', () => {
 	test('prefers a finished matching build over active builds', () => {
 		const builds: EASBuild[] = [
 			{ id: 'active', status: 'in-progress' },
@@ -100,35 +99,47 @@ describe('resolveBuildAction', () => {
 		]
 		const finished = builds[1]
 		if (!finished) throw new Error('expected finished build')
-		expect(resolveBuildAction(builds)).toEqual({
-			action: 'ota',
+		expect(resolveBuildDecision(builds)).toEqual({
+			deployType: 'ota',
+			nativeBuildPending: false,
 			build: finished
 		})
 	})
 
-	test('waits for all active EAS statuses without duplicating a build', () => {
+	test('marks nativeBuildPending for every active EAS status', () => {
 		for (const status of [
 			'in-progress',
 			'new',
 			'in-queue',
 			'pending-cancel'
 		] as const) {
-			expect(resolveBuildAction([{ id: status, status }])).toEqual({
-				action: 'build-in-progress',
+			expect(resolveBuildDecision([{ id: status, status }])).toEqual({
+				deployType: 'ota',
+				nativeBuildPending: true,
 				build: { id: status, status }
 			})
 		}
 	})
 
-	test('retries after terminal build failures', () => {
-		expect(resolveBuildAction([{ id: 'failed', status: 'errored' }])).toEqual({
-			action: 'build',
-			build: null
-		})
+	test('fails when the newest build is errored', () => {
+		expect(() =>
+			resolveBuildDecision([
+				{
+					id: 'failed',
+					status: 'errored',
+					buildUrl:
+						'https://expo.dev/accounts/lullu/projects/lullu/builds/failed'
+				}
+			])
+		).toThrow(/force-native/)
+	})
+
+	test('queues a native build after a canceled build', () => {
 		expect(
-			resolveBuildAction([{ id: 'canceled', status: 'canceled' }])
+			resolveBuildDecision([{ id: 'canceled', status: 'canceled' }])
 		).toEqual({
-			action: 'build',
+			deployType: 'native',
+			nativeBuildPending: false,
 			build: null
 		})
 	})
@@ -145,25 +156,20 @@ describe('decideRelease', () => {
 			}
 		)
 
-		expect(decision.action).toBe('skip')
 		expect(decision.deployType).toBe('none')
+		expect(decision.nativeBuildPending).toBe(false)
 		expect(decision.fingerprint).toBeNull()
 		expect(calls).toHaveLength(1)
+		expect(calls[0]).toContain('diff.relative=false')
 	})
 
-	test('uses EAS fingerprints and a targeted finished lookup', async () => {
+	test('uses one fingerprint lookup and one unfiltered build:list', async () => {
 		const calls: string[][] = []
 		const fingerprint = 'f'.repeat(64)
 		const responses = [
 			'apps/expo/src/app/_layout.tsx\n',
 			JSON.stringify({ hash: fingerprint }),
-			JSON.stringify([
-				{
-					id: 'build_123',
-					status: 'FINISHED',
-					buildDetailsPageUrl: 'https://expo.dev/builds/build_123'
-				}
-			])
+			JSON.stringify([finishedBuild])
 		]
 		const decision = await decideRelease(
 			productionDecision(),
@@ -176,31 +182,28 @@ describe('decideRelease', () => {
 		)
 
 		expect(decision).toMatchObject({
-			action: 'ota',
 			deployType: 'ota',
+			nativeBuildPending: false,
 			fingerprint,
 			build: {
 				id: 'build_123',
-				buildUrl: 'https://expo.dev/builds/build_123'
+				buildUrl:
+					'https://expo.dev/accounts/lullu/projects/lullu/builds/build_123'
 			}
 		})
-		expect(calls[1]).toContain('eas')
+		expect(calls[1]?.[0]).toBe('eas')
 		expect(calls[1]).toContain('fingerprint:generate')
-		expect(calls[1]).toContain('--build-profile')
-		expect(calls[1]).toContain('production')
-		expect(calls[2]).toContain('--status')
-		expect(calls[2]).toContain('finished')
+		expect(calls[2]).toContain('build:list')
 		expect(calls[2]).toContain('--limit')
-		expect(calls[2]).toContain('1')
+		expect(calls[2]).toContain('20')
+		expect(calls[2]).not.toContain('--status')
+		expect(calls).toHaveLength(3)
 	})
 
-	test('checks active build statuses after no finished build is found', async () => {
+	test('returns ota with nativeBuildPending when only an active build exists', async () => {
 		const responses = [
 			'apps/expo/src/app/_layout.tsx\n',
 			JSON.stringify({ hash: 'fingerprint' }),
-			'[]',
-			'[]',
-			'[]',
 			JSON.stringify([{ id: 'queued', status: 'IN_QUEUE' }])
 		]
 		const decision = await decideRelease(productionDecision(), async () => {
@@ -210,8 +213,8 @@ describe('decideRelease', () => {
 		})
 
 		expect(decision).toMatchObject({
-			action: 'build-in-progress',
 			deployType: 'ota',
+			nativeBuildPending: true,
 			build: { id: 'queued', status: 'in-queue' }
 		})
 	})
@@ -220,10 +223,6 @@ describe('decideRelease', () => {
 		const responses = [
 			'apps/expo/src/app/_layout.tsx\n',
 			JSON.stringify({ hash: 'fingerprint' }),
-			'[]',
-			'[]',
-			'[]',
-			'[]',
 			'[]'
 		]
 		const decision = await decideRelease(productionDecision(), async () => {
@@ -233,11 +232,31 @@ describe('decideRelease', () => {
 		})
 
 		expect(decision).toMatchObject({
-			action: 'build',
 			deployType: 'native',
+			nativeBuildPending: false,
 			fingerprint: 'fingerprint',
 			build: null
 		})
+	})
+
+	test('fails open when the git base is unreachable', async () => {
+		const calls: string[][] = []
+		const responses = [JSON.stringify({ hash: 'fingerprint' }), '[]']
+		const decision = await decideRelease(
+			productionDecision(),
+			async (command) => {
+				calls.push(command)
+				if (command[0] === 'git') {
+					throw new Error('unknown revision')
+				}
+				const response = responses.shift()
+				if (!response) throw new Error('Unexpected command')
+				return response
+			}
+		)
+
+		expect(decision.deployType).toBe('native')
+		expect(calls[1]).toContain('fingerprint:generate')
 	})
 
 	test('writes deploy_type for PR checks', async () => {
@@ -246,13 +265,16 @@ describe('decideRelease', () => {
 		process.env.GITHUB_OUTPUT = outputPath
 		try {
 			await writeDecideGitHubOutput({
-				action: 'build-in-progress',
 				deployType: 'ota',
+				nativeBuildPending: true,
 				changedFiles: ['apps/expo/src/app/_layout.tsx'],
 				fingerprint: 'abc',
 				build: { id: 'queued', status: 'in-queue' }
 			})
-			expect(await Bun.file(outputPath).text()).toContain('deploy_type=ota')
+			const output = await Bun.file(outputPath).text()
+			expect(output).toContain('deploy_type<<')
+			expect(output).toContain('ota')
+			expect(output).toContain('native_build_pending')
 		} finally {
 			if (previous === undefined) {
 				delete process.env.GITHUB_OUTPUT

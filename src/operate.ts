@@ -1,48 +1,84 @@
-import {
-	parseBoolean,
-	parseFlagArgs,
-	parsePlatform,
-	type ReleasePlatform
-} from './args'
-import type { ReleaseAction } from './decide'
+import type { DeployType, Operation, ReleasePlatform } from './args'
 import { appendGitHubOutput } from './github-output'
+import {
+	type CommandRunner,
+	dryRunCommand,
+	easCommand,
+	generateFingerprint,
+	runInherited
+} from './run'
 
-export type Operation =
-	| 'deploy'
-	| 'force-native'
-	| 'retry-ota'
-	| 'republish-latest'
-	| 'rollback-embedded'
+export type { Operation }
 
 export type OperationInput = {
 	profile: string
-	action: ReleaseAction
+	deployType: DeployType
 	operation: Operation
 	channel: string
 	environment?: string
 	platform: ReleasePlatform
 	autoSubmit: boolean
+	fingerprint?: string
+	group?: string
+	runtimeVersion?: string
+	message?: string
 	preUpdate?: string
 	postUpdate?: string
 	updateExtraArgs?: string
+	dryRun?: boolean
+	readPackageJson?: () => Promise<unknown>
 }
 
-type CommandRunner = (command: string[]) => Promise<void>
+export type OperationResult = 'skipped' | 'ota' | 'native-build' | 'recovery'
 
-const OPERATE_USAGE =
-	'Usage: expo-release operate --profile <profile> --action <action> --operation <operation> [--channel <channel>] [--environment <env>] [--platform ios] [--auto-submit true] [--pre-update <cmd>] [--post-update <cmd>] [--update-extra-args <args>]'
-
-async function run(command: string[]): Promise<void> {
-	const child = Bun.spawn(command, { stdout: 'inherit', stderr: 'inherit' })
-	const exitCode = await child.exited
-	if (exitCode !== 0) {
-		throw new Error(`Command failed (${command.join(' ')})`)
-	}
+function extraUpdateArgs(value: string | undefined): string[] {
+	return value?.split(/\s+/).filter(Boolean) ?? []
 }
 
-function messageFor(profile: string): string {
+export function updateMessage(input: {
+	profile: string
+	fingerprint?: string
+	message?: string
+}): string {
+	if (input.message) return input.message
 	const sha = process.env.GITHUB_SHA?.slice(0, 7) ?? 'manual'
-	return `${profile} ${sha}`
+	const fingerprint = input.fingerprint?.slice(0, 8)
+	if (fingerprint) {
+		return `${input.profile} ${sha} (fp ${fingerprint})`
+	}
+	return `${input.profile} ${sha}`
+}
+
+export function parseExpoSdkMajor(version: string | undefined): number | null {
+	if (!version) return null
+	const match = version.match(/(\d+)/)
+	if (!match?.[1]) return null
+	return Number(match[1])
+}
+
+async function defaultReadPackageJson(): Promise<unknown> {
+	const file = Bun.file('package.json')
+	if (!(await file.exists())) return null
+	return file.json()
+}
+
+export async function requireEnvironmentIfNeeded(
+	input: Pick<OperationInput, 'environment' | 'readPackageJson'>
+) {
+	if (input.environment) return
+	const pkg = await (input.readPackageJson ?? defaultReadPackageJson)()
+	if (!pkg || typeof pkg !== 'object' || pkg === null) return
+	const record = pkg as {
+		dependencies?: { expo?: string }
+		devDependencies?: { expo?: string }
+	}
+	const version = record.dependencies?.expo ?? record.devDependencies?.expo
+	const major = parseExpoSdkMajor(version)
+	if (major !== null && major >= 55) {
+		throw new Error(
+			'EAS Update requires --environment for Expo SDK 55+. Pass --environment <name>.'
+		)
+	}
 }
 
 async function runHook(
@@ -50,23 +86,41 @@ async function runHook(
 	commandRunner: CommandRunner
 ) {
 	if (!command) return
-	await commandRunner(['bash', '-lc', command])
+	await commandRunner(['bash', '-c', command])
 }
 
-function extraUpdateArgs(value: string | undefined): string[] {
-	return value?.split(/\s+/).filter(Boolean) ?? []
+function mutatingRunner(
+	commandRunner: CommandRunner,
+	dryRun: boolean
+): CommandRunner {
+	return async (command) => {
+		if (dryRun) {
+			dryRunCommand(command)
+			return ''
+		}
+		return commandRunner(command)
+	}
 }
 
 async function publishUpdate(
 	input: OperationInput,
 	commandRunner: CommandRunner
 ) {
+	await requireEnvironmentIfNeeded(input)
 	await runHook(input.preUpdate, commandRunner)
-	const command = ['bunx', 'eas', 'update', '--channel', input.channel]
+	const command = easCommand(
+		'update',
+		'--channel',
+		input.channel,
+		'--platform',
+		input.platform,
+		'--message',
+		updateMessage(input),
+		'--non-interactive'
+	)
 	if (input.environment) {
 		command.push('--environment', input.environment)
 	}
-	command.push('--message', messageFor(input.profile), '--non-interactive')
 	command.push(...extraUpdateArgs(input.updateExtraArgs))
 	await commandRunner(command)
 	await runHook(input.postUpdate, commandRunner)
@@ -76,9 +130,7 @@ async function queueNativeBuild(
 	input: OperationInput,
 	commandRunner: CommandRunner
 ) {
-	const command = [
-		'bunx',
-		'eas',
+	const command = easCommand(
 		'build',
 		'--platform',
 		input.platform,
@@ -86,49 +138,74 @@ async function queueNativeBuild(
 		input.profile,
 		'--non-interactive',
 		'--no-wait'
-	]
+	)
 	if (input.autoSubmit) {
 		command.push('--auto-submit')
 	}
 	await commandRunner(command)
 }
 
-export type OperationResult = 'skipped' | 'ota' | 'native-build' | 'recovery'
+async function resolveRuntimeVersion(
+	input: OperationInput,
+	commandRunner: CommandRunner
+): Promise<string> {
+	if (input.runtimeVersion) return input.runtimeVersion
+	if (input.fingerprint) return input.fingerprint
+	return generateFingerprint(input, commandRunner)
+}
 
 export async function operateRelease(
 	input: OperationInput,
-	commandRunner: CommandRunner = run
+	commandRunner: CommandRunner = runInherited
 ): Promise<OperationResult> {
+	const execute = mutatingRunner(commandRunner, input.dryRun === true)
+
 	switch (input.operation) {
-		case 'republish-latest':
-			await commandRunner([
-				'bunx',
-				'eas',
-				'update:republish',
-				'--channel',
-				input.channel,
-				'--message',
-				`Recovery republish ${messageFor(input.profile)}`,
-				'--non-interactive'
-			])
+		case 'republish': {
+			if (!input.group) {
+				throw new Error(
+					'Usage: --operation republish requires --group <update-group-id>'
+				)
+			}
+			await requireEnvironmentIfNeeded(input)
+			await execute(
+				easCommand(
+					'update:republish',
+					'--group',
+					input.group,
+					'--platform',
+					input.platform,
+					'--message',
+					updateMessage(input),
+					'--non-interactive'
+				)
+			)
 			return 'recovery'
-		case 'rollback-embedded':
-			await commandRunner([
-				'bunx',
-				'eas',
-				'update:roll-back-to-embedded',
-				'--channel',
-				input.channel,
-				'--message',
-				`Recovery rollback ${messageFor(input.profile)}`,
-				'--non-interactive'
-			])
+		}
+		case 'rollback-embedded': {
+			await requireEnvironmentIfNeeded(input)
+			const runtimeVersion = await resolveRuntimeVersion(input, commandRunner)
+			await execute(
+				easCommand(
+					'update:roll-back-to-embedded',
+					'--channel',
+					input.channel,
+					'--platform',
+					input.platform,
+					'--runtime-version',
+					runtimeVersion,
+					'--message',
+					updateMessage(input),
+					'--non-interactive'
+				)
+			)
 			return 'recovery'
+		}
 		case 'force-native':
-			await queueNativeBuild(input, commandRunner)
+			await queueNativeBuild(input, execute)
 			return 'native-build'
 		case 'retry-ota':
-			await publishUpdate(input, commandRunner)
+			await publishUpdate(input, execute)
 			return 'ota'
 		case 'deploy':
 			break
@@ -138,74 +215,22 @@ export async function operateRelease(
 		}
 	}
 
-	switch (input.action) {
-		case 'skip':
+	switch (input.deployType) {
+		case 'none':
 			return 'skipped'
-		case 'build':
-			await queueNativeBuild(input, commandRunner)
+		case 'native':
+			await queueNativeBuild(input, execute)
 			return 'native-build'
 		case 'ota':
-		case 'build-in-progress':
-			await publishUpdate(input, commandRunner)
+			await publishUpdate(input, execute)
 			return 'ota'
 		default: {
-			const _exhaustive: never = input.action
-			throw new Error(`Unsupported action: ${_exhaustive}`)
+			const _exhaustive: never = input.deployType
+			throw new Error(`Unsupported deploy type: ${_exhaustive}`)
 		}
 	}
 }
 
-function parseAction(value: string | undefined): ReleaseAction {
-	if (
-		value === 'skip' ||
-		value === 'ota' ||
-		value === 'build' ||
-		value === 'build-in-progress'
-	) {
-		return value
-	}
-	throw new Error(OPERATE_USAGE)
-}
-
-function optionalString(value: string | undefined): string | undefined {
-	const trimmed = value?.trim()
-	return trimmed ? trimmed : undefined
-}
-
-function parseOperation(value: string | undefined): Operation {
-	if (
-		value === 'deploy' ||
-		value === 'force-native' ||
-		value === 'retry-ota' ||
-		value === 'republish-latest' ||
-		value === 'rollback-embedded'
-	) {
-		return value
-	}
-	throw new Error(OPERATE_USAGE)
-}
-
-export function parseOperateArgs(args: string[]): OperationInput {
-	const values = parseFlagArgs(args, OPERATE_USAGE)
-	const profile = values.get('profile')
-	if (!profile) {
-		throw new Error(OPERATE_USAGE)
-	}
-
-	return {
-		profile,
-		action: parseAction(values.get('action')),
-		operation: parseOperation(values.get('operation')),
-		channel: values.get('channel') ?? profile,
-		environment: values.get('environment'),
-		platform: parsePlatform(values.get('platform')),
-		autoSubmit: parseBoolean(values.get('auto-submit'), true),
-		preUpdate: optionalString(values.get('pre-update')),
-		postUpdate: optionalString(values.get('post-update')),
-		updateExtraArgs: optionalString(values.get('update-extra-args'))
-	}
-}
-
 export async function writeOperateGitHubOutput(result: OperationResult) {
-	await appendGitHubOutput([`result=${result}`])
+	await appendGitHubOutput({ result })
 }

@@ -1,21 +1,19 @@
-export { DEFAULT_IMPACT_PATHS, type ReleasePlatform } from './args'
+export {
+	DEFAULT_IMPACT_PATHS,
+	type CommandName,
+	type DeployType,
+	type Operation,
+	type ReleaseOptions,
+	type ReleasePlatform
+} from './args'
 export {
 	type DecisionInput,
-	type DeployType,
 	type EASBuild,
-	type ReleaseAction,
 	type ReleaseDecision,
-	decideRelease,
-	deployTypeForAction,
-	hasExpoImpact,
-	isExpoImpactPath,
-	parseDecideArgs,
-	resolveBuildAction
+	decideRelease
 } from './decide'
 export {
-	type Operation,
 	type OperationInput,
 	type OperationResult,
-	operateRelease,
-	parseOperateArgs
+	operateRelease
 } from './operate'

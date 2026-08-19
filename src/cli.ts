@@ -1,62 +1,96 @@
 #!/usr/bin/env bun
 
 import {
+	type ReleaseOptions,
+	USAGE,
+	needsDecide,
+	parseReleaseOptions,
+	shouldIgnoreExpoImpact
+} from './args'
+import {
+	type DecisionInput,
+	type ReleaseDecision,
 	decideRelease,
-	parseDecideArgs,
 	writeDecideGitHubOutput
 } from './decide'
 import {
+	type OperationInput,
 	operateRelease,
-	parseOperateArgs,
 	writeOperateGitHubOutput
 } from './operate'
 
-const USAGE =
-	'Usage: expo-release <release|decide|operate> --profile <profile> ...'
-
-function withDefaultFlags(args: string[], flags: Record<string, string>) {
-	const next = [...args]
-	for (const [key, value] of Object.entries(flags)) {
-		if (!next.includes(`--${key}`)) {
-			next.push(`--${key}`, value)
-		}
+function toDecisionInput(options: ReleaseOptions): DecisionInput {
+	return {
+		base: options.base,
+		head: options.head,
+		profile: options.profile,
+		platform: options.platform,
+		impactPaths: options.impactPaths,
+		ignoreExpoImpact: shouldIgnoreExpoImpact(options)
 	}
-	return next
+}
+
+function toOperationInput(
+	options: ReleaseOptions,
+	decision: ReleaseDecision | null
+): OperationInput {
+	return {
+		profile: options.profile,
+		deployType: decision?.deployType ?? options.deployType,
+		operation: options.operation,
+		channel: options.channel,
+		environment: options.environment,
+		platform: options.platform,
+		autoSubmit: options.autoSubmit,
+		fingerprint: options.fingerprint ?? decision?.fingerprint ?? undefined,
+		group: options.group,
+		runtimeVersion: options.runtimeVersion,
+		message: options.message,
+		preUpdate: options.preUpdate,
+		postUpdate: options.postUpdate,
+		updateExtraArgs: options.updateExtraArgs,
+		dryRun: options.dryRun
+	}
 }
 
 async function main() {
-	const [command, ...args] = Bun.argv.slice(2)
-	switch (command) {
+	const raw = Bun.argv.slice(2)
+	if (raw.length === 0 || raw[0] === '--help' || raw[0] === '-h') {
+		process.stdout.write(`${USAGE}\n`)
+		return
+	}
+
+	const options = parseReleaseOptions(raw)
+
+	switch (options.command) {
 		case 'decide': {
-			const decision = await decideRelease(parseDecideArgs(args))
+			const decision = await decideRelease(toDecisionInput(options))
 			await writeDecideGitHubOutput(decision)
 			process.stdout.write(`${JSON.stringify(decision)}\n`)
 			return
 		}
 		case 'operate': {
-			const result = await operateRelease(parseOperateArgs(args))
+			const result = await operateRelease(toOperationInput(options, null))
 			await writeOperateGitHubOutput(result)
 			process.stdout.write(`${result}\n`)
 			return
 		}
 		case 'release': {
-			const decision = await decideRelease(parseDecideArgs(args))
-			await writeDecideGitHubOutput(decision)
-			process.stdout.write(`${JSON.stringify(decision)}\n`)
-			const result = await operateRelease(
-				parseOperateArgs(
-					withDefaultFlags(args, {
-						action: decision.action,
-						operation: 'deploy'
-					})
-				)
-			)
+			let decision: ReleaseDecision | null = null
+			if (needsDecide(options.operation)) {
+				decision = await decideRelease(toDecisionInput(options))
+				await writeDecideGitHubOutput(decision)
+				process.stdout.write(`${JSON.stringify(decision)}\n`)
+			}
+			const result = await operateRelease(toOperationInput(options, decision))
 			await writeOperateGitHubOutput(result)
 			process.stdout.write(`${result}\n`)
 			return
 		}
-		default:
-			throw new Error(USAGE)
+		default: {
+			const _exhaustive: never = options.command
+			throw new Error(`Unsupported command: ${_exhaustive}`)
+		}
 	}
 }
 
