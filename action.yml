@@ -63,6 +63,10 @@ inputs:
     description: Extra tokens appended to eas update (e.g. --input-dir dist --skip-bundler)
     required: false
     default: ''
+  export-source-maps:
+    description: On OTA, expo export with external source maps, then publish dist
+    required: false
+    default: 'false'
   group:
     description: Update group ID required by operation=republish
     required: false
@@ -123,6 +127,7 @@ runs:
         EXPO_RELEASE_PRE_UPDATE: ${{ inputs.pre-update }}
         EXPO_RELEASE_POST_UPDATE: ${{ inputs.post-update }}
         EXPO_RELEASE_UPDATE_EXTRA_ARGS: ${{ inputs.update-extra-args }}
+        EXPO_RELEASE_EXPORT_SOURCE_MAPS: ${{ inputs.export-source-maps }}
         EXPO_RELEASE_GROUP: ${{ inputs.group }}
         EXPO_RELEASE_RUNTIME_VERSION: ${{ inputs.runtime-version }}
         EXPO_RELEASE_MESSAGE: ${{ inputs.message }}

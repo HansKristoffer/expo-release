@@ -49,6 +49,7 @@ function toOperationInput(
 		preUpdate: options.preUpdate,
 		postUpdate: options.postUpdate,
 		updateExtraArgs: options.updateExtraArgs,
+		exportSourceMaps: options.exportSourceMaps,
 		dryRun: options.dryRun
 	}
 }

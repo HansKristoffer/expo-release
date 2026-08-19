@@ -31,6 +31,7 @@ export type ReleaseOptions = {
 	preUpdate?: string
 	postUpdate?: string
 	updateExtraArgs?: string
+	exportSourceMaps: boolean
 	group?: string
 	runtimeVersion?: string
 	message?: string
@@ -39,7 +40,7 @@ export type ReleaseOptions = {
 }
 
 export const USAGE =
-	'Usage: expo-release <release|decide|operate> --profile <profile> [--base <sha>] [--head <sha>] [--platform ios|android] [--impact-paths apps/expo/] [--operation deploy|force-native|retry-ota|republish|rollback-embedded] [--deploy-type none|ota|native] [--channel <channel>] [--environment <env>] [--group <id>] [--runtime-version <hash>] [--message <msg>] [--fingerprint <hash>] [--auto-submit true] [--pre-update <cmd>] [--post-update <cmd>] [--update-extra-args <args>] [--dry-run] [--ignore-expo-impact true]'
+	'Usage: expo-release <release|decide|operate> --profile <profile> [--base <sha>] [--head <sha>] [--platform ios|android] [--impact-paths apps/expo/] [--operation deploy|force-native|retry-ota|republish|rollback-embedded] [--deploy-type none|ota|native] [--channel <channel>] [--environment <env>] [--group <id>] [--runtime-version <hash>] [--message <msg>] [--fingerprint <hash>] [--auto-submit true] [--export-source-maps true] [--pre-update <cmd>] [--post-update <cmd>] [--update-extra-args <args>] [--dry-run] [--ignore-expo-impact true]'
 
 function fromEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
 	const value = env[name]?.trim()
@@ -156,6 +157,7 @@ export function parseReleaseOptions(
 		'pre-update'?: string
 		'post-update'?: string
 		'update-extra-args'?: string
+		'export-source-maps'?: string
 		group?: string
 		'runtime-version'?: string
 		message?: string
@@ -184,6 +186,7 @@ export function parseReleaseOptions(
 				'pre-update': { type: 'string' },
 				'post-update': { type: 'string' },
 				'update-extra-args': { type: 'string' },
+				'export-source-maps': { type: 'string' },
 				group: { type: 'string' },
 				'runtime-version': { type: 'string' },
 				message: { type: 'string' },
@@ -297,6 +300,13 @@ export function parseReleaseOptions(
 				values['update-extra-args'],
 				fromEnv(env, 'EXPO_RELEASE_UPDATE_EXTRA_ARGS')
 			)
+		),
+		exportSourceMaps: parseBoolean(
+			firstDefined(
+				values['export-source-maps'],
+				fromEnv(env, 'EXPO_RELEASE_EXPORT_SOURCE_MAPS')
+			),
+			false
 		),
 		group,
 		runtimeVersion: optionalString(

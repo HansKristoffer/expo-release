@@ -7,6 +7,11 @@ import {
 	generateFingerprint,
 	runInherited
 } from './run'
+import {
+	assertSourceMaps,
+	mergeUpdateArgs,
+	sourceMapExportCommand
+} from './source-maps'
 
 export type { Operation }
 
@@ -25,8 +30,10 @@ export type OperationInput = {
 	preUpdate?: string
 	postUpdate?: string
 	updateExtraArgs?: string
+	exportSourceMaps?: boolean
 	dryRun?: boolean
 	readPackageJson?: () => Promise<unknown>
+	hasSourceMaps?: () => Promise<boolean>
 }
 
 export type OperationResult = 'skipped' | 'ota' | 'native-build' | 'recovery'
@@ -107,6 +114,12 @@ async function publishUpdate(
 	commandRunner: CommandRunner
 ) {
 	await requireEnvironmentIfNeeded(input)
+	if (input.exportSourceMaps) {
+		await commandRunner(sourceMapExportCommand(input.platform))
+		if (input.dryRun !== true) {
+			await assertSourceMaps(input.hasSourceMaps)
+		}
+	}
 	await runHook(input.preUpdate, commandRunner)
 	const command = easCommand(
 		'update',
@@ -121,7 +134,12 @@ async function publishUpdate(
 	if (input.environment) {
 		command.push('--environment', input.environment)
 	}
-	command.push(...extraUpdateArgs(input.updateExtraArgs))
+	command.push(
+		...mergeUpdateArgs(
+			extraUpdateArgs(input.updateExtraArgs),
+			input.exportSourceMaps === true
+		)
+	)
 	await commandRunner(command)
 	await runHook(input.postUpdate, commandRunner)
 }

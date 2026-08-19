@@ -272,6 +272,88 @@ describe('operateRelease', () => {
 		expect(commands).toHaveLength(0)
 	})
 
+	test('exports Hermes maps and publishes dist on the OTA path', async () => {
+		const commands: string[][] = []
+		const result = await operateRelease(
+			{
+				...productionOperate,
+				deployType: 'ota',
+				operation: 'deploy',
+				exportSourceMaps: true,
+				hasSourceMaps: async () => true,
+				postUpdate: 'bunx posthog-cli hermes upload --directory dist'
+			},
+			async (command) => {
+				commands.push(command)
+				return ''
+			}
+		)
+
+		expect(result).toBe('ota')
+		expect(commands).toEqual([
+			[
+				'bunx',
+				'expo',
+				'export',
+				'--platform',
+				'ios',
+				'--output-dir',
+				'dist',
+				'--source-maps',
+				'external'
+			],
+			expect.arrayContaining([
+				'eas',
+				'update',
+				'--input-dir',
+				'dist',
+				'--skip-bundler'
+			]),
+			['bash', '-c', 'bunx posthog-cli hermes upload --directory dist']
+		])
+	})
+
+	test('refuses an OTA when export produced no source maps', async () => {
+		const commands: string[][] = []
+		await expect(
+			operateRelease(
+				{
+					...productionOperate,
+					deployType: 'ota',
+					operation: 'deploy',
+					exportSourceMaps: true,
+					hasSourceMaps: async () => false
+				},
+				async (command) => {
+					commands.push(command)
+					return ''
+				}
+			)
+		).rejects.toThrow('Hermes source maps')
+		expect(commands).toHaveLength(1)
+		expect(commands[0]).toContain('export')
+	})
+
+	test('does not export source maps for native builds', async () => {
+		const commands: string[][] = []
+		await operateRelease(
+			{
+				...productionOperate,
+				deployType: 'native',
+				operation: 'deploy',
+				exportSourceMaps: true,
+				hasSourceMaps: async () => true
+			},
+			async (command) => {
+				commands.push(command)
+				return ''
+			}
+		)
+
+		expect(commands.flat()).not.toContain('export')
+		expect(commands.flat()).not.toContain('--skip-bundler')
+	})
+
 	test('runs pre-update, extra args, and post-update around eas update', async () => {
 		const commands: string[][] = []
 		const result = await operateRelease(
@@ -379,6 +461,40 @@ describe('operateRelease', () => {
 		expect(commands[1]).toContain('update')
 	})
 
+	test('prints expo export during a dry run and skips the map check', async () => {
+		const commands: string[][] = []
+		const writes: string[] = []
+		const warning = process.stderr.write
+		process.stderr.write = ((chunk: string) => {
+			writes.push(chunk)
+			return true
+		}) as typeof process.stderr.write
+		try {
+			const result = await operateRelease(
+				{
+					...productionOperate,
+					deployType: 'ota',
+					operation: 'deploy',
+					dryRun: true,
+					exportSourceMaps: true,
+					hasSourceMaps: async () => {
+						throw new Error('dry-run must not inspect dist')
+					}
+				},
+				async (command) => {
+					commands.push(command)
+					return ''
+				}
+			)
+			expect(result).toBe('ota')
+			expect(commands).toHaveLength(0)
+			expect(writes.join('')).toContain('expo export')
+			expect(writes.join('')).toContain('eas update')
+		} finally {
+			process.stderr.write = warning
+		}
+	})
+
 	test('prints mutating commands during a dry run', async () => {
 		const commands: string[][] = []
 		const writes: string[] = []
@@ -405,6 +521,7 @@ describe('operateRelease', () => {
 			expect(commands).toHaveLength(0)
 			expect(writes.join('')).toContain('[dry-run]')
 			expect(writes.join('')).toContain('eas update')
+			expect(writes.join('')).toContain('export-hermes.ts')
 		} finally {
 			process.stderr.write = warning
 		}

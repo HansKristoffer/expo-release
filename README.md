@@ -222,6 +222,7 @@ A manual `deploy` from `workflow_dispatch` ignores the impact diff. That is inte
 | `pre-update` | _(empty)_ | Shell command before `eas update` (OTA only) |
 | `post-update` | _(empty)_ | Shell command after a successful `eas update` (OTA only) |
 | `update-extra-args` | _(empty)_ | Extra tokens appended to `eas update` |
+| `export-source-maps` | `false` | OTA only: `expo export --source-maps external`, refuse if `dist` has no `.map`, then `eas update --input-dir dist --skip-bundler`. Pair with `post-update` to upload those maps for PostHog error tracking. |
 | `group` | _(empty)_ | Required when `operation` is `republish` |
 | `runtime-version` | current fingerprint | Used when `operation` is `rollback-embedded` |
 | `message` | `{profile} {sha} (fp {hash})` | Override the generated `eas update` message |
@@ -270,7 +271,9 @@ bun "${{ github.action_path }}/src/cli.ts" decide \
 
 `pre-update`, `post-update`, and `update-extra-args` run only on the OTA path (`deploy` + `ota`, and `retry-ota`). Skip, native builds, republish, and rollback ignore them. Hook commands inherit process env. A non-zero hook exit fails operate; `post-update` does not run if `eas update` fails.
 
-Production apps that export Hermes maps first set them only on the production operate step:
+`export-source-maps` is the shared Hermes export. Set it only on profiles that should publish a pre-exported `dist` (usually production). Staging stays a default `eas update`.
+
+Use it with PostHog error tracking: the same `dist` bundle that goes to `eas update` contains the Hermes `.map` files PostHog needs to symbolicate production crashes. Upload them in `post-update` after a successful OTA (`POSTHOG_CLI_API_KEY`, `POSTHOG_CLI_PROJECT_ID`, and `POSTHOG_CLI_HOST` must reach the action step):
 
 ```yaml
 - uses: HansKristoffer/expo-release@v2
@@ -278,8 +281,7 @@ Production apps that export Hermes maps first set them only on the production op
     command: release
     profile: production
     environment: production
-    pre-update: bun scripts/release/export-hermes.ts
-    update-extra-args: --input-dir dist --skip-bundler
+    export-source-maps: 'true'
     post-update: bunx posthog-cli hermes upload --directory dist
   env:
     APP_VARIANT: production
@@ -287,7 +289,7 @@ Production apps that export Hermes maps first set them only on the production op
     APS_ENVIRONMENT: production
 ```
 
-`export-hermes.ts` is app-owned (typically `expo export --source-maps external` plus a Hermes `.map` check). Staging stays a default `eas update`.
+Override the Expo binary with `EXPO_BIN` (defaults to `bunx expo`). `--dry-run` prints the export command and skips the `.map` check.
 
 ### Recovery operations
 
@@ -301,7 +303,7 @@ Production apps that export Hermes maps first set them only on the production op
 
 ### Dry run
 
-`--dry-run` still runs `git diff`, `eas fingerprint:generate`, and `eas build:list` so the decision is real. It only prints `eas update`, `eas build`, recovery commands, and OTA hooks.
+`--dry-run` still runs `git diff`, `eas fingerprint:generate`, and `eas build:list` so the decision is real. It only prints `eas update`, `eas build`, recovery commands, `expo export` (when `export-source-maps` is on), and OTA hooks.
 
 ```yaml
 - uses: HansKristoffer/expo-release@v2
@@ -408,8 +410,9 @@ expo-release operate \
   [--group <update-group-id>] \
   [--runtime-version <hash>] \
   [--message "custom message"] \
-  [--pre-update "bun scripts/release/export-hermes.ts"] \
-  [--update-extra-args "--input-dir dist --skip-bundler"] \
+  [--export-source-maps true] \
+  [--pre-update "bun scripts/release/tag-dist.ts"] \
+  [--update-extra-args "--private-key-path key"] \
   [--post-update "bunx posthog-cli hermes upload --directory dist"]
 ```
 

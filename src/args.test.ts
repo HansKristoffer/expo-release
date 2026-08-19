@@ -20,6 +20,7 @@ describe('parseReleaseOptions', () => {
 			deployType: 'none',
 			channel: 'staging',
 			autoSubmit: true,
+			exportSourceMaps: false,
 			dryRun: false
 		})
 	})
@@ -37,6 +38,8 @@ describe('parseReleaseOptions', () => {
 					'production',
 					'--auto-submit',
 					'false',
+					'--export-source-maps',
+					'true',
 					'--dry-run'
 				],
 				{}
@@ -45,6 +48,7 @@ describe('parseReleaseOptions', () => {
 			impactPaths: ['apps/expo/', 'packages/conductor/'],
 			environment: 'production',
 			autoSubmit: false,
+			exportSourceMaps: true,
 			dryRun: true
 		})
 	})
@@ -131,5 +135,6 @@ describe('shouldIgnoreExpoImpact', () => {
 describe('USAGE', () => {
 	test('documents the public commands', () => {
 		expect(USAGE).toContain('expo-release <release|decide|operate>')
+		expect(USAGE).toContain('--export-source-maps')
 	})
 })
