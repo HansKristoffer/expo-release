@@ -19,13 +19,23 @@ decide — git diff + eas fingerprint:generate + eas build:list
 
 ## Install
 
-Use the composite action. The package is not published to npm.
+### GitHub Action
 
 ```yaml
 uses: HansKristoffer/expo-release@v2
 ```
 
 The action runs `bun ${{ github.action_path }}/src/cli.ts`. The caller must already have checked out the repo (`fetch-depth: 0`), installed Bun, set up EAS, and installed workspace dependencies.
+
+### npm (CLI)
+
+For local use or custom CI:
+
+```bash
+bun add -D expo-release
+```
+
+Then run `expo-release` (see [CLI](#cli)).
 
 Pin `eas-cli` with `expo/expo-github-action`. The CLI invokes `eas` from `PATH` (override with `EAS_BIN` for local tests), so that pin is the version that actually runs.
 
@@ -370,6 +380,6 @@ expo-release operate \
 `release` is decide + operate (same as the action default). `force-native`, `republish`, and `rollback-embedded` skip decide. `decide` prints JSON including `deployType` and `nativeBuildPending`. When `GITHUB_OUTPUT` is set, decide writes `deploy_type`, `native_build_pending`, `changed`, `fingerprint`, `build_id`, `build_url`. Operate writes `result`.
 
 ```bash
-# local
-bun src/cli.ts decide --base HEAD^ --head HEAD --profile production
+# local (after bun add -D expo-release)
+expo-release decide --base HEAD^ --head HEAD --profile production
 ```
