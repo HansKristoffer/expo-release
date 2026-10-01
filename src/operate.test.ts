@@ -35,6 +35,18 @@ describe('updateMessage', () => {
 		}
 	})
 
+	test('uses a manual label outside GitHub Actions', () => {
+		const previous = process.env.GITHUB_SHA
+		delete process.env.GITHUB_SHA
+		try {
+			expect(
+				updateMessage({ profile: 'production', fingerprint: '9f2c1b04' })
+			).toBe('production manual (fp 9f2c1b04)')
+		} finally {
+			if (previous !== undefined) process.env.GITHUB_SHA = previous
+		}
+	})
+
 	test('honors an explicit override', () => {
 		expect(
 			updateMessage({
@@ -76,7 +88,12 @@ describe('operateRelease', () => {
 	test('publishes production OTA updates for a finished native match', async () => {
 		const commands: string[][] = []
 		const result = await operateRelease(
-			{ ...productionOperate, deployType: 'ota', operation: 'deploy' },
+			{
+				...productionOperate,
+				deployType: 'ota',
+				operation: 'deploy',
+				message: 'release smoke'
+			},
 			async (command) => {
 				commands.push(command)
 				return ''
@@ -92,7 +109,7 @@ describe('operateRelease', () => {
 		expect(commands[0]).toContain('--platform')
 		expect(commands[0]).toContain('ios')
 		expect(commands[0]).toContain('--environment')
-		expect(commands[0]).toContain('production manual (fp 9f2c1b04)')
+		expect(commands[0]).toContain('release smoke')
 	})
 
 	test('omits --environment when it is not set', async () => {

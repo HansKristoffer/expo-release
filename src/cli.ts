@@ -58,7 +58,11 @@ async function main() {
 	const raw = Bun.argv.slice(2)
 	// The composite action passes everything through EXPO_RELEASE_* env vars and no argv.
 	const hasEnvCommand = Boolean(process.env.EXPO_RELEASE_COMMAND?.trim())
-	if ((raw.length === 0 && !hasEnvCommand) || raw[0] === '--help' || raw[0] === '-h') {
+	if (
+		(raw.length === 0 && !hasEnvCommand) ||
+		raw[0] === '--help' ||
+		raw[0] === '-h'
+	) {
 		process.stdout.write(`${USAGE}\n`)
 		return
 	}
