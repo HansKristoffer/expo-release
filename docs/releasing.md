@@ -25,3 +25,5 @@ The workflow checks that the tag exists as a GitHub release and agrees with the 
 The GitHub Action major tag (`v2`, for example) moves only after npm publication succeeds. Consumers can pin an exact release tag or commit instead.
 
 GitHub documents this token behavior in [Triggering a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
+
+The initial manifest reserves the existing `v2.1.1` action tag, which predates Release Please and contains package version 2.1.0. The next package release must use a fresh version/tag; do not move or reuse that historical exact-version tag.
