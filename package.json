@@ -46,18 +46,21 @@
 		"build:js": "bun build ./src/index.ts ./src/cli.ts --outdir ./dist --target bun --packages external",
 		"build:types": "tsgo -p tsconfig.build.json",
 		"prepublishOnly": "bun run build",
-		"publish:patch": "npm version patch && npm publish",
-		"publish:minor": "npm version minor && npm publish",
-		"publish:major": "npm version major && npm publish",
 		"test": "bun test",
 		"lint": "bun run typecheck && bun biome check",
 		"lint:write": "bun run typecheck && bun biome check --write",
-		"typecheck": "tsgo --noEmit"
+		"typecheck": "tsgo --noEmit",
+		"verify:package": "node scripts/verify-package.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.6",
 		"@types/bun": "latest",
 		"@typescript/native-preview": "^7.0.0-dev.20260306.1",
 		"typescript": "^5.7.0"
-	}
+	},
+	"homepage": "https://github.com/HansKristoffer/expo-release#readme",
+	"bugs": {
+		"url": "https://github.com/HansKristoffer/expo-release/issues"
+	},
+	"packageManager": "bun@1.4.2"
 }

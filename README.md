@@ -17,6 +17,15 @@ decide — git diff + eas fingerprint:generate + eas build:list
      └─ no matching native build → eas build --auto-submit --no-wait
 ```
 
+## Install and requirements
+
+```sh
+bun add -D expo-release
+bunx expo-release --help
+```
+
+The CLI and GitHub Action require Bun. EAS operations also need an authenticated Expo account and the EAS CLI in the calling project; Expo SDK 55+ OTA updates require an explicit EAS environment. CI verifies Bun 1.4.2. Installing the npm package does not deploy an application.
+
 ## Set up with AI
 
 Copy the prompt below into Cursor, Claude Code, or another coding agent to wire up expo-release in your existing repo.
@@ -422,3 +431,7 @@ expo-release operate \
 # local (after bun add -D expo-release)
 expo-release decide --base HEAD^ --head HEAD --profile production
 ```
+
+## Releasing
+
+Squash PRs with conventional titles (`fix:`, `feat:`, or `feat!:`). Release Please keeps the version and changelog in a release PR; merge that PR to publish with release notes and npm provenance. See [release and recovery instructions](docs/releasing.md).
