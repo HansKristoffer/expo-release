@@ -2,7 +2,7 @@
 
 Use a pull request with a conventional title. `fix:` and `perf:` release a patch, `feat:` a minor, and `feat!:` or a `BREAKING CHANGE:` footer a major. `chore:`, `ci:`, `docs:`, `refactor:` and `test:` do not release. Squash merging uses the PR title; do not manually edit versions or changelogs.
 
-CI checks the PR title, lint/types, tests, build and installed npm artifact. The release workflow explicitly dispatches CI on Release Please's branch, so required checks work with the repository's built-in token. No personal access token is needed.
+CI checks the PR title, lint/types, tests, build and installed npm artifact. Release Please uses the built-in repository token. GitHub requires a maintainer to select **Approve workflows to run** on each bot-created or updated release PR before its PR checks start. Wait for those checks before merging; manual CI dispatches do not satisfy PR protection. No personal access token is needed.
 
 ## Publish
 
@@ -23,3 +23,7 @@ gh workflow run release.yml --repo HansKristoffer/expo-release -f tag=vX.Y.Z
 The workflow checks that the tag exists as a GitHub release and agrees with the package version. Existing npm versions are skipped; registry errors fail rather than being mistaken for an unpublished version. npm versions are immutable: a broken published package needs a new fix PR and release. A source change cannot repair an old tag's build; cut a new release for that.
 
 The GitHub Action major tag (`v2`, for example) moves only after npm publication succeeds. Consumers can pin an exact release tag or commit instead.
+
+GitHub documents this token behavior in [Triggering a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
+
+The initial manifest reserves the existing `v2.1.1` action tag, which predates Release Please and contains package version 2.1.0. The next package release must use a fresh version/tag; do not move or reuse that historical exact-version tag.
