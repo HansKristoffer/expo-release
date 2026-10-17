@@ -16,18 +16,47 @@ export async function runCaptured(command: string[]): Promise<string> {
 		child.exited
 	])
 	if (exitCode !== 0) {
-		throw new Error(
-			`Command failed (${command.join(' ')}):\n${stderr || stdout}`
-		)
+		throw new Error(describeFailure(command, exitCode, { stderr, stdout }))
 	}
 	return stdout
+}
+
+const OUTPUT_TAIL_LINES = 100
+
+function tail(output: string): string {
+	const lines = output.trimEnd().split('\n')
+	if (lines.length <= OUTPUT_TAIL_LINES) return lines.join('\n')
+	const omitted = lines.length - OUTPUT_TAIL_LINES
+	return [
+		`... (${omitted} earlier lines omitted)`,
+		...lines.slice(-OUTPUT_TAIL_LINES)
+	].join('\n')
+}
+
+// Both streams are kept: EAS can print only an upgrade notice on stderr while
+// the real error lands on stdout (or the reverse). The command line holds no
+// secrets; tokens reach EAS through the environment, which is never printed.
+export function describeFailure(
+	command: string[],
+	exitCode: number,
+	output: { stderr: string; stdout: string }
+): string {
+	const sections = [
+		`Command failed with exit code ${exitCode}: ${quoteCommand(command)}`
+	]
+	if (output.stderr.trim()) sections.push(`stderr:\n${tail(output.stderr)}`)
+	if (output.stdout.trim()) sections.push(`stdout:\n${tail(output.stdout)}`)
+	if (sections.length === 1) sections.push('(no output)')
+	return sections.join('\n')
 }
 
 export async function runInherited(command: string[]): Promise<string> {
 	const child = Bun.spawn(command, { stdout: 'inherit', stderr: 'inherit' })
 	const exitCode = await child.exited
 	if (exitCode !== 0) {
-		throw new Error(`Command failed (${command.join(' ')})`)
+		throw new Error(
+			`Command failed with exit code ${exitCode}: ${quoteCommand(command)} (output above)`
+		)
 	}
 	return ''
 }
