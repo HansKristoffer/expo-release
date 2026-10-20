@@ -34,7 +34,17 @@ try {
 		cwd: temporary, stdio: 'pipe', timeout: 120_000
 	})
 	const specifiers = Object.keys(pkg.exports).filter((key) => key !== './package.json').map((key) => pkg.name + (key === '.' ? '' : key.slice(1)))
-	const code = `for (const name of ${JSON.stringify(specifiers)}) await import(name); console.log('Verified package imports');`
+	// Subpaths built on optional peers (React Native runtime helpers) load until
+	// they reach a peer the bare consumer does not have.
+	const peers = Object.keys(pkg.peerDependencies || {})
+	const code = `const peers = ${JSON.stringify(peers)}
+for (const name of ${JSON.stringify(specifiers)}) {
+	try { await import(name) } catch (error) {
+		if (!peers.some((peer) => String(error?.message).includes(\`'\${peer}'\`))) throw error
+		console.log(\`\${name} needs its optional peers\`)
+	}
+}
+console.log('Verified package imports');`
 	const runtime = ['plantr', 'expo-release'].includes(pkg.name) ? 'bun' : process.execPath
 	execFileSync(runtime, ['--input-type=module', '-e', code], { cwd: temporary, stdio: 'inherit', timeout: 30_000 })
 	if (pkg.name === 'plantr') {
