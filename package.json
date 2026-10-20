@@ -1,7 +1,7 @@
 {
 	"name": "expo-release",
 	"version": "2.1.0",
-	"description": "Fingerprint-driven Expo EAS release: OTA update or native store build",
+	"description": "Fingerprint-driven Expo EAS release: OTA update or native store build, plus app runtime helpers",
 	"type": "module",
 	"module": "./dist/index.js",
 	"main": "./dist/index.js",
@@ -39,23 +39,53 @@
 			"bun": "./src/index.ts",
 			"import": "./dist/index.js",
 			"default": "./dist/index.js"
+		},
+		"./runtime": {
+			"types": "./dist/runtime/index.d.ts",
+			"import": "./dist/runtime/index.js",
+			"default": "./dist/runtime/index.js"
 		}
 	},
 	"scripts": {
 		"build": "bun run build:js && bun run build:types",
-		"build:js": "bun build ./src/index.ts ./src/cli.ts --outdir ./dist --target bun --packages external",
+		"build:js": "bun build ./src/index.ts ./src/cli.ts --outdir ./dist --target bun --packages external && bun build ./src/runtime/index.ts --outdir ./dist/runtime --target browser --packages external",
 		"build:types": "tsgo -p tsconfig.build.json",
 		"prepublishOnly": "bun run build",
 		"test": "bun test",
 		"lint": "bun run typecheck && bun biome check",
 		"lint:write": "bun run typecheck && bun biome check --write",
-		"typecheck": "tsgo --noEmit",
+		"typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.runtime.json",
 		"verify:package": "node scripts/verify-package.mjs"
+	},
+	"peerDependencies": {
+		"expo-device": ">=55",
+		"expo-notifications": ">=55",
+		"expo-updates": ">=55",
+		"react": ">=19"
+	},
+	"peerDependenciesMeta": {
+		"expo-device": {
+			"optional": true
+		},
+		"expo-notifications": {
+			"optional": true
+		},
+		"expo-updates": {
+			"optional": true
+		},
+		"react": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.6",
 		"@types/bun": "latest",
+		"@types/react": "~19.2.0",
 		"@typescript/native-preview": "^7.0.0-dev.20260306.1",
+		"expo-device": "~55.0.10",
+		"expo-notifications": "~55.0.14",
+		"expo-updates": "~55.0.16",
+		"react": "19.2.0",
 		"typescript": "^5.7.0"
 	},
 	"homepage": "https://github.com/HansKristoffer/expo-release#readme",

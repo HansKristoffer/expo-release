@@ -1,0 +1,54 @@
+name: Playwright browsers
+description: Restore Playwright browsers for the installed Playwright version, installing and saving them on a miss. Install dependencies first.
+
+inputs:
+  working-directory:
+    description: Package whose node_modules/.bin/playwright to use.
+    required: false
+    default: .
+  browsers:
+    description: Space-separated browsers to install.
+    required: false
+    default: chromium
+  save-cache:
+    description: Save the browsers after a miss.
+    required: false
+    default: 'true'
+
+outputs:
+  cache-hit:
+    description: Whether the browsers came from the cache.
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    # The workspace binary, never `bunx playwright`: from the repo root that
+    # pulls the latest Playwright, whose browsers a pinned version cannot launch.
+    - id: version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: echo "version=$(./node_modules/.bin/playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+    - id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-${{ steps.version.outputs.version }}-${{ inputs.browsers }}
+
+    # No --with-deps: ubuntu-latest already carries the libraries Chromium needs.
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BROWSERS: ${{ inputs.browsers }}
+      run: ./node_modules/.bin/playwright install $BROWSERS
+
+    # Saved here, not in a post step: actions/cache only saves after success, so
+    # a failing test run would never populate it.
+    - if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      continue-on-error: true
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ steps.cache.outputs.cache-primary-key }}

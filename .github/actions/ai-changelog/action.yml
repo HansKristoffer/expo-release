@@ -1,0 +1,173 @@
+name: AI changelog
+description: >-
+  Writes a plain-language changelog for a pushed commit range with Claude: one
+  chat message and one Markdown entry. Optionally posts the message to a
+  webhook. Check out with fetch-depth 0 first.
+
+inputs:
+  anthropic-api-key:
+    description: Anthropic API key.
+    required: true
+  model:
+    description: Claude model id.
+    required: false
+    default: claude-sonnet-5-5
+  base:
+    description: First commit of the range (exclusive).
+    required: false
+    default: ${{ github.event.before }}
+  head:
+    description: Last commit of the range.
+    required: false
+    default: ${{ github.event.after || github.sha }}
+  chat-format:
+    description: Formatting rules for the chat message.
+    required: false
+    default: 'WhatsApp formatting only: *bold* for headings and item titles, plain URLs (no Slack-style <url|label> links).'
+  instructions:
+    description: Extra guidance appended to the prompt, such as audience or product names.
+    required: false
+    default: ''
+  github-token:
+    description: Token used to read the merged pull request.
+    required: false
+    default: ${{ github.token }}
+  webhook-url:
+    description: When set, POST the chat message here as JSON.
+    required: false
+    default: ''
+  webhook-token:
+    description: Bearer token for the webhook.
+    required: false
+    default: ''
+  webhook-payload:
+    description: JSON object merged into the webhook body, for example {"groupId":"..."}. The message goes in "message".
+    required: false
+    default: '{}'
+
+outputs:
+  message:
+    description: Chat-formatted changelog.
+    value: ${{ steps.generate.outputs.message }}
+  markdown:
+    description: Markdown changelog entry, ready to prepend to CHANGELOG.md.
+    value: ${{ steps.generate.outputs.markdown }}
+
+runs:
+  using: composite
+  steps:
+    - name: Gather context
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        BASE: ${{ inputs.base }}
+        HEAD: ${{ inputs.head }}
+      run: |
+        set -euo pipefail
+        context="$RUNNER_TEMP/changelog-context.md"
+        if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]]; then range=(-1 "$HEAD"); diff=(diff-tree --no-commit-id --name-status -r "$HEAD")
+        else range=("$BASE..$HEAD"); diff=(diff --name-status "$BASE..$HEAD"); fi
+        {
+          echo '## Commits'
+          git log --pretty=format:'### %s%n%nAuthor: %an%nHash: %h%n%n%b%n----%n' "${range[@]}"
+          echo
+          echo '## Pull request'
+          # Merge commit "Merge pull request #12" or squash "title (#12)".
+          pr=$(git log -1 --pretty=%B "$HEAD" | grep -oE 'Merge pull request #[0-9]+|\(#[0-9]+\)' | head -1 | grep -oE '[0-9]+' || true)
+          if [[ -n "$pr" ]] && data=$(gh pr view "$pr" --json title,body,labels 2>/dev/null); then
+            echo "PR #$pr"
+            echo "$data" | jq -r '"**Title:** \(.title)\n\n**Labels:** \([.labels[].name] | join(", "))\n\n**Description:**\n\(.body // "")"'
+          else
+            echo 'No pull request found.'
+          fi
+          echo
+          echo '## Changed files'
+          git "${diff[@]}"
+        } > "$context"
+
+    - name: Generate changelog
+      id: generate
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        MODEL: ${{ inputs.model }}
+        BASE: ${{ inputs.base }}
+        HEAD: ${{ inputs.head }}
+        CHAT_FORMAT: ${{ inputs.chat-format }}
+        INSTRUCTIONS: ${{ inputs.instructions }}
+        COMPARE_URL: ${{ github.server_url }}/${{ github.repository }}/compare/${{ inputs.base }}...${{ inputs.head }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        prompt="$RUNNER_TEMP/changelog-prompt.md"
+        cat > "$prompt" <<PROMPT
+        REPO: $REPOSITORY
+        COMMIT RANGE: $BASE..$HEAD
+        DATE: $(git log -1 --format=%cs "$HEAD")
+
+        Here is the context about what changed:
+
+        $(cat "$RUNNER_TEMP/changelog-context.md")
+
+        Generate a changelog that is EASY TO READ for everyone in the organization, including non-technical people.
+
+        GUIDELINES:
+        - Write in plain, simple language; avoid technical jargon
+        - Focus on WHAT changed and WHY it matters to users, not HOW it was implemented
+        - Each bullet is a clear, human-readable sentence: a descriptive title, a dash, an explanation
+        - Only include sections that have items
+        - Skip purely technical commits (refactoring, dependencies, CI) or summarize them as "Internal improvements"
+        - Group related commits into one bullet
+        $INSTRUCTIONS
+
+        Output exactly TWO sections separated by the line ===SEPARATOR===
+
+        SECTION 1: chat message. $CHAT_FORMAT
+        Headings: What's New, then Features, Changes, Fixes. End with $COMPARE_URL
+
+        ===SEPARATOR===
+
+        SECTION 2: GitHub Markdown
+        ## YYYY-MM-DD (use DATE)
+        ### Features / ### Changes / ### Fixes with "- **Title** - Description" bullets
+        [View all changes]($COMPARE_URL)
+
+        Output ONLY the two sections and the separator.
+        PROMPT
+        response=$(curl -sS https://api.anthropic.com/v1/messages \
+          -H 'content-type: application/json' \
+          -H "x-api-key: $ANTHROPIC_API_KEY" \
+          -H 'anthropic-version: 2023-06-01' \
+          -d "$(jq -n --arg model "$MODEL" --rawfile prompt "$prompt" \
+            '{model: $model, max_tokens: 2048, messages: [{role: "user", content: $prompt}]}')")
+        content=$(echo "$response" | jq -r '.content[0].text // empty')
+        if [[ -z "$content" ]]; then
+          echo "::error::Claude returned no changelog"
+          echo "$response" | jq . >&2
+          exit 1
+        fi
+        delimiter="EOF_$(openssl rand -hex 8)"
+        {
+          echo "message<<$delimiter"
+          echo "$content" | awk '/===SEPARATOR===/{exit} {print}'
+          echo "$delimiter"
+          echo "markdown<<$delimiter"
+          echo "$content" | awk 'found {print} /===SEPARATOR===/{found=1}'
+          echo "$delimiter"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Post to webhook
+      if: inputs.webhook-url != ''
+      shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        WEBHOOK_TOKEN: ${{ inputs.webhook-token }}
+        WEBHOOK_PAYLOAD: ${{ inputs.webhook-payload }}
+        MESSAGE: ${{ steps.generate.outputs.message }}
+      run: |
+        set -euo pipefail
+        auth=()
+        [[ -n "$WEBHOOK_TOKEN" ]] && auth=(-H "Authorization: Bearer $WEBHOOK_TOKEN")
+        body=$(jq -n --argjson extra "$WEBHOOK_PAYLOAD" --arg message "$MESSAGE" '$extra + {message: $message}')
+        curl -sS --fail-with-body -X POST "$WEBHOOK_URL" "${auth[@]}" \
+          -H 'content-type: application/json' -d "$body"

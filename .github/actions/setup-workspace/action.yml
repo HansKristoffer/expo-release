@@ -1,0 +1,69 @@
+name: Setup workspace
+description: Install Bun (and optionally Node), restore the dependency cache and install. Check out the repository first.
+
+inputs:
+  bun-version:
+    description: Bun version. Leave empty to read bun-version-file.
+    required: false
+    default: ''
+  bun-version-file:
+    description: File setup-bun reads the version from (package.json packageManager, .bun-version, .tool-versions).
+    required: false
+    default: package.json
+  node-version:
+    description: Node version to install as well. Empty skips Node.
+    required: false
+    default: ''
+  cache-paths:
+    description: Newline-separated paths to cache.
+    required: false
+    default: |
+      node_modules
+      packages/*/node_modules
+      apps/*/node_modules
+  cache-key-files:
+    description: Glob(s) whose hash keys the cache.
+    required: false
+    default: bun.lock
+  save-cache:
+    description: Save the cache after a miss. Enable on one short job (or a cache-warm workflow on main) so every PR can read it.
+    required: false
+    default: 'false'
+
+outputs:
+  cache-hit:
+    description: Whether the cache matched the key exactly.
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun-version }}
+        bun-version-file: ${{ inputs.bun-version == '' && inputs.bun-version-file || '' }}
+
+    - if: inputs.node-version != ''
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ inputs.cache-paths }}
+        key: ${{ runner.os }}-bun-${{ hashFiles(inputs.cache-key-files) }}
+        restore-keys: |
+          ${{ runner.os }}-bun-
+
+    # Install even on a hit: the key covers the lockfile only, so a hit can carry
+    # workspace package copies from an older commit. A warm install relinks them.
+    - shell: bash
+      working-directory: ${{ github.workspace }}
+      run: bun install --frozen-lockfile
+
+    - if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ inputs.cache-paths }}
+        key: ${{ steps.cache.outputs.cache-primary-key }}

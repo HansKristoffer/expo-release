@@ -432,6 +432,200 @@ expo-release operate \
 expo-release decide --base HEAD^ --head HEAD --profile production
 ```
 
+## App runtime
+
+`expo-release/runtime` has the app side of a release: OTA prompts, push notifications and a render-error boundary. Install the package as a dependency (not `-D`) to use it. `react`, `expo-updates`, `expo-notifications` and `expo-device` are optional peers; the CLI never needs them. The helpers render no UI: pass your toast, dialog and error screen.
+
+### OTA updates
+
+Checks once per launch, downloads a new update and hands you a `reload` for your "Restart" prompt. It is off in development and wherever expo-updates is disabled (Expo Go).
+
+```tsx
+import { useOTAUpdates } from 'expo-release/runtime'
+
+function AppContent() {
+  const { toast } = useToast()
+  useOTAUpdates((reload) =>
+    toast.show({
+      id: 'ota-update-available',
+      label: 'Update ready',
+      description: 'A new version downloaded. Tap Restart to apply.',
+      actionLabel: 'Restart',
+      onActionPress: reload
+    })
+  )
+}
+```
+
+The callback is read through a ref, so an unstable toast function never repeats the check. `checkForOTAUpdate(onUpdateReady)` runs the same check outside React.
+
+### Push notifications
+
+Create the service once. It sets the foreground handler and the Android `default` channel, and owns the permission flow and the Expo push token. Your backend call is `registerDevice` (`null` unregisters).
+
+```ts
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Alert } from 'react-native'
+import { createPushNotifications } from 'expo-release/runtime'
+
+export const push = createPushNotifications({
+  storage: AsyncStorage,
+  registerDevice: (expoPushToken) =>
+    api.user.registerDevice({ platform: Platform.OS, expoPushToken }),
+  // Optional soft-ask before the OS dialog.
+  confirm: () =>
+    new Promise((resolve) =>
+      Alert.alert('Turn on alerts?', 'Get notified about new messages.', [
+        { text: 'Not now', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Enable', onPress: () => resolve(true) }
+      ])
+    ),
+  onUnavailable: (reason) => {
+    if (reason === 'denied') Alert.alert('Notifications off', 'Turn them on in device settings.')
+  },
+  onError: (message, error) => logger.error(message, error)
+})
+```
+
+| Member | Use |
+|--------|-----|
+| `prompt()` | After sign-in. Asks once per install (soft-ask, then OS dialog), registers the token on a grant. Never throws; concurrent calls share one dialog. |
+| `enable()` / `disable()` | Settings toggle. `enable` requests permission and registers; `disable` calls `registerDevice(null)`. Save the user's preference yourself, before `enable()`: a denied dialog then leaves the preference on with `isEnabled` false, and the token registers on the next mount once permission is granted in device settings. |
+| `syncToken()` | Re-registers the current token when permission is granted. |
+| `listen({ onReceived, onResponse })` | Subscribes and returns the unsubscribe function. `onResponse` also receives the tap that launched the app. |
+| `getPermissionStatus()`, `getPushToken()`, `requestPermissions()`, `hasPrompted()` | Lower-level steps. |
+
+`usePushNotifications(push, { enabled })` gives a settings screen `permission`, `isEnabled`, `isLoading` and wrapped `prompt`/`enable`/`disable`. `enabled` is the saved preference; while it is on, the token is re-registered on mount.
+
+### Error boundary
+
+```tsx
+import { ErrorBoundary } from 'expo-release/runtime'
+
+<ErrorBoundary
+  fallback={({ error, reset }) => <ErrorScreen message={error.message} onRetry={reset} />}
+  onError={(error, info) =>
+    posthog.captureException(error, { $exception_source: 'error_boundary', component_stack: info.componentStack })
+  }
+>
+  <App />
+</ErrorBoundary>
+```
+
+Report errors in `onError`: render errors are caught before they become uncaught exceptions, so error-tracking autocapture never sees them.
+
+## Workspace and PR actions
+
+Composite actions for Bun monorepos, used as `HansKristoffer/expo-release/.github/actions/<name>@v2`. Pass secrets as inputs.
+
+| Action | Does |
+|--------|------|
+| `setup-workspace` | Bun (version from `package.json` `packageManager` by default), optional Node, restore the dependency cache keyed on `bun.lock`, always `bun install --frozen-lockfile`, save on a miss with `save-cache: 'true'`. `cache-paths` and `cache-key-files` are inputs. |
+| `playwright-browsers` | Restores browsers for the installed Playwright version; installs and saves on a miss. |
+| `pr-preview` | Railway preview environment per PR with its own PlanetScale Postgres branch and a Cloudflare-managed host. Creates on open/sync, deletes on close. |
+| `ai-changelog` | Plain-language changelog of a pushed range with Claude; outputs `message` (chat) and `markdown`, optionally POSTs the message to a webhook. |
+
+### Warm the caches on main
+
+Caches written by `pull_request` runs are scoped to that PR. Warm them on main so every new PR starts from a hit:
+
+```yaml
+name: Cache Warm
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: cache-warm
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: HansKristoffer/expo-release/.github/actions/setup-workspace@v2
+        with:
+          save-cache: 'true'
+          cache-paths: |   # consumer: add generated clients
+            node_modules
+            packages/*/node_modules
+            apps/*/node_modules
+      - uses: HansKristoffer/expo-release/.github/actions/playwright-browsers@v2
+        with:
+          working-directory: apps/platform
+```
+
+Use the same `cache-paths` in every job, since they are part of the cache version.
+
+### PR preview environments
+
+The preview duplicates `railway-source-environment` (default `staging`) into `pr-<number>`, points git-connected services at the PR branch, sets `DATABASE_URL` and `DATABASE_URL_DIRECT` to a fresh PlanetScale branch, attaches `pr-<number>.<zone>` with Cloudflare DNS, then sets `BASE_URL`, which triggers the one deployment (run migrations and seeds in your pre-deploy step).
+
+```yaml
+name: PR preview
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+concurrency:
+  group: pr-preview-${{ github.event.number }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  preview:
+    # Fork PRs cannot read the secrets.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: HansKristoffer/expo-release/.github/actions/pr-preview@v2
+        with:
+          planetscale-org: ${{ secrets.PLANETSCALE_ORG_NAME }}
+          planetscale-database: my-app-staging
+          planetscale-service-token-id: ${{ secrets.PLANETSCALE_SERVICE_TOKEN_ID }}
+          planetscale-service-token: ${{ secrets.PLANETSCALE_SERVICE_TOKEN }}
+          railway-token: ${{ secrets.RAILWAY_STAGING_TOKEN }}
+          railway-project-id: ${{ secrets.RAILWAY_STAGING_PROJECT_ID }}
+          railway-service: ${{ secrets.RAILWAY_STAGING_SERVICE }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          cloudflare-zone-name: previews.example.com
+```
+
+The action needs Cloudflare DNS for the preview host; a Railway-generated domain is not supported yet. Requirements: a PlanetScale **Postgres** database with a service token scoped to it (`read_branch`, `create_branch`, `delete_branch`, `create_branch_password`); a Railway account API token; a Cloudflare token with Zone.DNS Edit and the zone's SSL/TLS mode set to Full. Extensions such as `vector` must be enabled on the source branch.
+
+### AI changelog
+
+```yaml
+name: Changelog
+on:
+  push:
+    branches: [main]
+jobs:
+  changelog:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: HansKristoffer/expo-release/.github/actions/ai-changelog@v2
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          webhook-url: ${{ secrets.CHANGELOG_WEBHOOK_URL }}
+          webhook-token: ${{ secrets.CHANGELOG_WEBHOOK_TOKEN }}
+          webhook-payload: '{"groupId": "${{ secrets.CHANGELOG_GROUP_ID }}"}'
+```
+
+Without `webhook-url`, read `steps.<id>.outputs.message` and `outputs.markdown` yourself. `chat-format` sets the message style (WhatsApp by default) and `instructions` adds audience or product context.
+
 ## Releasing
 
 Squash PRs with conventional titles (`fix:`, `feat:`, or `feat!:`). Release Please keeps the version and changelog in a release PR; merge that PR to publish with release notes and npm provenance. See [release and recovery instructions](docs/releasing.md).
