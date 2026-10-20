@@ -40,5 +40,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun test
+      - run: bash .github/actions/pr-preview/railway-preview-branch.test.sh
       - run: bun run build
       - run: bun run verify:package

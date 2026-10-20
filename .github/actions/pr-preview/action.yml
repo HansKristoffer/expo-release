@@ -1,0 +1,290 @@
+name: PR preview environment
+description: >-
+  Per-PR preview on Railway with its own PlanetScale Postgres branch and a
+  Cloudflare-managed preview host. Creates or updates the preview on an open
+  PR, and deletes the branch, DNS records and Railway environment once the PR
+  closes.
+
+inputs:
+  operation:
+    description: create or destroy. Empty destroys on a closed pull_request event and creates otherwise.
+    required: false
+    default: ''
+  pr-number:
+    description: Pull request number.
+    required: false
+    default: ${{ github.event.pull_request.number }}
+  head-ref:
+    description: Branch the preview services deploy from.
+    required: false
+    default: ${{ github.head_ref }}
+  name-prefix:
+    description: Prefix of the PlanetScale branch, Railway environment and preview host (pr-123).
+    required: false
+    default: pr-
+  planetscale-org:
+    description: PlanetScale organization.
+    required: true
+  planetscale-database:
+    description: PlanetScale Postgres database the preview branches from.
+    required: true
+  planetscale-service-token-id:
+    description: Service token id with read_branch, create_branch, delete_branch and create_branch_password. Scope it to this database only.
+    required: true
+  planetscale-service-token:
+    description: Service token secret.
+    required: true
+  railway-token:
+    description: Railway account API token (not a project token).
+    required: true
+  railway-project-id:
+    description: Railway project id.
+    required: true
+  railway-service:
+    description: Service (name or id) that gets the database variables and the preview host.
+    required: true
+  railway-source-environment:
+    description: Environment the preview duplicates.
+    required: false
+    default: staging
+  railway-cli-version:
+    description: '@railway/cli version.'
+    required: false
+    default: latest
+  database-url-variables:
+    description: Space-separated variables set to the branch database URL. Include the direct URL so migrations never run against the source environment.
+    required: false
+    default: DATABASE_URL DATABASE_URL_DIRECT
+  base-url-variable:
+    description: Variable set to the preview URL. Setting it triggers the single deployment.
+    required: false
+    default: BASE_URL
+  cloudflare-api-token:
+    description: Token with Zone.DNS Edit on the preview zone.
+    required: true
+  cloudflare-zone-id:
+    description: Cloudflare zone id.
+    required: true
+  cloudflare-zone-name:
+    description: Preview zone, for example previews.example.com. Its SSL/TLS mode must be Full while the CNAME is proxied.
+    required: true
+
+outputs:
+  preview-url:
+    description: Preview URL (create only).
+    value: ${{ steps.names.outputs.url }}
+  environment:
+    description: Railway environment and PlanetScale branch name.
+    value: ${{ steps.names.outputs.name }}
+
+runs:
+  using: composite
+  steps:
+    - id: names
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation || (github.event.action == 'closed' && 'destroy' || 'create') }}
+        NAME: ${{ inputs.name-prefix }}${{ inputs.pr-number }}
+        ZONE: ${{ inputs.cloudflare-zone-name }}
+      run: |
+        [[ "$OPERATION" == create || "$OPERATION" == destroy ]] || { echo "::error::operation must be create or destroy"; exit 1; }
+        echo "operation=$OPERATION" >> "$GITHUB_OUTPUT"
+        echo "name=$NAME" >> "$GITHUB_OUTPUT"
+        echo "host=$NAME.$ZONE" >> "$GITHUB_OUTPUT"
+        if [[ "$OPERATION" == create ]]; then echo "url=https://$NAME.$ZONE" >> "$GITHUB_OUTPUT"; fi
+
+    - uses: planetscale/setup-pscale-action@v1
+
+    - shell: bash
+      env:
+        VERSION: ${{ inputs.railway-cli-version }}
+      run: npm install -g "@railway/cli@$VERSION"
+
+    # ---------------------------------------------------------------- create
+
+    - name: Ensure PlanetScale branch
+      if: steps.names.outputs.operation == 'create'
+      shell: bash
+      env:
+        PLANETSCALE_SERVICE_TOKEN_ID: ${{ inputs.planetscale-service-token-id }}
+        PLANETSCALE_SERVICE_TOKEN: ${{ inputs.planetscale-service-token }}
+        PSCALE_ORG: ${{ inputs.planetscale-org }}
+        PSCALE_DB: ${{ inputs.planetscale-database }}
+        PS_BRANCH: ${{ steps.names.outputs.name }}
+      run: |
+        if pscale branch show "$PSCALE_DB" "$PS_BRANCH" --org "$PSCALE_ORG" >/dev/null 2>&1; then
+          echo "Branch $PS_BRANCH already exists."
+        else
+          pscale branch create "$PSCALE_DB" "$PS_BRANCH" --org "$PSCALE_ORG" --wait
+        fi
+
+    - name: Create database credentials
+      if: steps.names.outputs.operation == 'create'
+      shell: bash
+      env:
+        PLANETSCALE_SERVICE_TOKEN_ID: ${{ inputs.planetscale-service-token-id }}
+        PLANETSCALE_SERVICE_TOKEN: ${{ inputs.planetscale-service-token }}
+        PSCALE_ORG: ${{ inputs.planetscale-org }}
+        PSCALE_DB: ${{ inputs.planetscale-database }}
+        PS_BRANCH: ${{ steps.names.outputs.name }}
+      run: |
+        set -euo pipefail
+        # Postgres uses `pscale role` (`pscale password` is Vitess only). A fresh
+        # role per attempt (7-day TTL) never collides on retries and needs no
+        # reset/delete permission. With -f json, failures arrive on stdout.
+        ROLE_NAME="ci-${PS_BRANCH}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        ec=0
+        resp=$(pscale role create "$PSCALE_DB" "$PS_BRANCH" "$ROLE_NAME" \
+          --inherited-roles postgres --ttl 168h -f json --org "$PSCALE_ORG") || ec=$?
+        if [ "$ec" -ne 0 ] || echo "$resp" | jq -e 'type == "object" and (.status == "error" or .status == "action_required")' >/dev/null 2>&1; then
+          echo "::error::pscale role create failed (exit $ec)" >&2
+          echo "$resp" >&2
+          exit 1
+        fi
+        # The CLI-built URL already escapes the password and names the database.
+        db_url=$(echo "$resp" | jq -r '.database_url // empty')
+        pass=$(echo "$resp" | jq -r '.password // empty')
+        if [ -z "$db_url" ]; then
+          echo "::error::Role response has no database_url" >&2
+          exit 1
+        fi
+        [ -n "$pass" ] && echo "::add-mask::$pass"
+        echo "::add-mask::$db_url"
+        echo "DB_URL=$db_url" >> "$GITHUB_ENV"
+
+    - name: Ensure Railway environment
+      if: steps.names.outputs.operation == 'create'
+      shell: bash
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        RAILWAY_PROJECT_ID: ${{ inputs.railway-project-id }}
+        RAILWAY_SERVICE: ${{ inputs.railway-service }}
+        RAILWAY_SOURCE_ENV: ${{ inputs.railway-source-environment }}
+        RAILWAY_ENV: ${{ steps.names.outputs.name }}
+        HEAD_REF: ${{ inputs.head-ref }}
+      run: |
+        set -euo pipefail
+        railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_SOURCE_ENV" --service "$RAILWAY_SERVICE" --json
+        # Duplicate the source environment so shared variables carry over.
+        if railway status --json | jq -e --arg n "$RAILWAY_ENV" '.environments.edges | map(.node.name) | index($n) != null' >/dev/null; then
+          echo "Railway environment $RAILWAY_ENV already exists."
+        else
+          railway environment new "$RAILWAY_ENV" --duplicate "$RAILWAY_SOURCE_ENV" --json
+        fi
+        railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENV" --service "$RAILWAY_SERVICE" --json
+
+    # The duplicate inherits the source branch; without this, every push to it
+    # would rebuild all open previews.
+    - name: Point services at the PR branch
+      if: steps.names.outputs.operation == 'create'
+      shell: bash
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        RAILWAY_PROJECT_ID: ${{ inputs.railway-project-id }}
+        RAILWAY_SERVICE: ${{ inputs.railway-service }}
+        RAILWAY_SOURCE_ENV: ${{ inputs.railway-source-environment }}
+        RAILWAY_ENV: ${{ steps.names.outputs.name }}
+        HEAD_REF: ${{ inputs.head-ref }}
+      run: bash "$GITHUB_ACTION_PATH/railway-preview-branch.sh"
+
+    - name: Set database variables
+      if: steps.names.outputs.operation == 'create'
+      shell: bash
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        RAILWAY_PROJECT_ID: ${{ inputs.railway-project-id }}
+        RAILWAY_SERVICE: ${{ inputs.railway-service }}
+        RAILWAY_SOURCE_ENV: ${{ inputs.railway-source-environment }}
+        RAILWAY_ENV: ${{ steps.names.outputs.name }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        VARIABLES: ${{ inputs.database-url-variables }}
+      run: |
+        set -euo pipefail
+        # stdin keeps the secret out of process argv.
+        for name in $VARIABLES; do
+          printf '%s' "$DB_URL" | railway variables --set-from-stdin "$name" \
+            --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENV" --skip-deploys
+        done
+
+    - name: Attach the preview host
+      if: steps.names.outputs.operation == 'create'
+      shell: bash
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        RAILWAY_SERVICE: ${{ inputs.railway-service }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
+        CLOUDFLARE_ZONE_NAME: ${{ inputs.cloudflare-zone-name }}
+        PREVIEW_HOST: ${{ steps.names.outputs.host }}
+      run: |
+        set -euo pipefail
+        status="$RUNNER_TEMP/railway-domain-status.json"
+        railway domain "$PREVIEW_HOST" --service "$RAILWAY_SERVICE" --json >/dev/null \
+          || echo "Domain already attached; reading status."
+        railway domain status "$PREVIEW_HOST" --service "$RAILWAY_SERVICE" --json > "$status"
+        "$GITHUB_ACTION_PATH/cloudflare-preview-dns.sh" check-ssl
+        "$GITHUB_ACTION_PATH/cloudflare-preview-dns.sh" upsert "$PREVIEW_HOST" "$status"
+
+    # One deployment, after the database and DNS are ready: a separate redeploy
+    # would run seeders concurrently against the same branch database.
+    - name: Set the preview URL and deploy
+      if: steps.names.outputs.operation == 'create'
+      shell: bash
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        RAILWAY_PROJECT_ID: ${{ inputs.railway-project-id }}
+        RAILWAY_SERVICE: ${{ inputs.railway-service }}
+        RAILWAY_SOURCE_ENV: ${{ inputs.railway-source-environment }}
+        RAILWAY_ENV: ${{ steps.names.outputs.name }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        BASE_URL_VARIABLE: ${{ inputs.base-url-variable }}
+        PREVIEW_URL: ${{ steps.names.outputs.url }}
+      run: |
+        railway variables --set "$BASE_URL_VARIABLE=$PREVIEW_URL" \
+          --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENV"
+
+    # --------------------------------------------------------------- destroy
+
+    - name: Delete PlanetScale branch
+      if: steps.names.outputs.operation == 'destroy'
+      shell: bash
+      env:
+        PLANETSCALE_SERVICE_TOKEN_ID: ${{ inputs.planetscale-service-token-id }}
+        PLANETSCALE_SERVICE_TOKEN: ${{ inputs.planetscale-service-token }}
+        PSCALE_ORG: ${{ inputs.planetscale-org }}
+        PSCALE_DB: ${{ inputs.planetscale-database }}
+        PS_BRANCH: ${{ steps.names.outputs.name }}
+      run: |
+        pscale branch delete "$PSCALE_DB" "$PS_BRANCH" --org "$PSCALE_ORG" --force \
+          || echo "Branch $PS_BRANCH already gone."
+
+    - name: Delete preview DNS
+      if: steps.names.outputs.operation == 'destroy'
+      shell: bash
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        RAILWAY_SERVICE: ${{ inputs.railway-service }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
+        CLOUDFLARE_ZONE_NAME: ${{ inputs.cloudflare-zone-name }}
+        PREVIEW_HOST: ${{ steps.names.outputs.host }}
+      run: '"$GITHUB_ACTION_PATH/cloudflare-preview-dns.sh" delete "$PREVIEW_HOST"'
+
+    - name: Delete Railway environment
+      if: steps.names.outputs.operation == 'destroy'
+      shell: bash
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        RAILWAY_PROJECT_ID: ${{ inputs.railway-project-id }}
+        RAILWAY_SERVICE: ${{ inputs.railway-service }}
+        RAILWAY_SOURCE_ENV: ${{ inputs.railway-source-environment }}
+        RAILWAY_ENV: ${{ steps.names.outputs.name }}
+        HEAD_REF: ${{ inputs.head-ref }}
+      run: |
+        set -euo pipefail
+        railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_SOURCE_ENV" --service "$RAILWAY_SERVICE" --json
+        if railway status --json | jq -e --arg n "$RAILWAY_ENV" '.environments.edges | map(.node.name) | index($n) != null' >/dev/null; then
+          railway environment delete "$RAILWAY_ENV" --yes || echo "Deleting $RAILWAY_ENV failed; delete it by hand."
+        else
+          echo "Railway environment $RAILWAY_ENV already gone."
+        fi
