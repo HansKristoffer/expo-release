@@ -490,7 +490,7 @@ export const push = createPushNotifications({
 | Member | Use |
 |--------|-----|
 | `prompt()` | After sign-in. Asks once per install (soft-ask, then OS dialog), registers the token on a grant. Never throws; concurrent calls share one dialog. |
-| `enable()` / `disable()` | Settings toggle. `enable` requests permission and registers; `disable` calls `registerDevice(null)`. Save the user's preference yourself. |
+| `enable()` / `disable()` | Settings toggle. `enable` requests permission and registers; `disable` calls `registerDevice(null)`. Save the user's preference yourself, before `enable()`: a denied dialog then leaves the preference on with `isEnabled` false, and the token registers on the next mount once permission is granted in device settings. |
 | `syncToken()` | Re-registers the current token when permission is granted. |
 | `listen({ onReceived, onResponse })` | Subscribes and returns the unsubscribe function. `onResponse` also receives the tap that launched the app. |
 | `getPermissionStatus()`, `getPushToken()`, `requestPermissions()`, `hasPrompted()` | Lower-level steps. |
@@ -595,7 +595,7 @@ jobs:
           cloudflare-zone-name: previews.example.com
 ```
 
-Requirements: a PlanetScale **Postgres** database with a service token scoped to it (`read_branch`, `create_branch`, `delete_branch`, `create_branch_password`); a Railway account API token; a Cloudflare token with Zone.DNS Edit and the zone's SSL/TLS mode set to Full. Extensions such as `vector` must be enabled on the source branch.
+The action needs Cloudflare DNS for the preview host; a Railway-generated domain is not supported yet. Requirements: a PlanetScale **Postgres** database with a service token scoped to it (`read_branch`, `create_branch`, `delete_branch`, `create_branch_password`); a Railway account API token; a Cloudflare token with Zone.DNS Edit and the zone's SSL/TLS mode set to Full. Extensions such as `vector` must be enabled on the source branch.
 
 ### AI changelog
 
