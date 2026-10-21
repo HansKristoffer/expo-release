@@ -14,8 +14,8 @@ Commands:
 
 Options:
   --profile <string>                                                       EAS build profile, also the default update channel [env: EXPO_RELEASE_PROFILE]
-  --base <string>                                                          Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE) [env: EXPO_RELEASE_BASE]
-  --head <string>                                                          Git head SHA for the impact diff (falls back to GITHUB_SHA) [env: EXPO_RELEASE_HEAD]
+  --base <string>                                                          Git base SHA for the impact diff [env: EXPO_RELEASE_BASE, GITHUB_EVENT_BEFORE]
+  --head <string>                                                          Git head SHA for the impact diff [env: EXPO_RELEASE_HEAD, GITHUB_SHA]
   --platform <ios|android>                                                 Native platform (default: "ios") [env: EXPO_RELEASE_PLATFORM]
   --impact-paths <string>                                                  Comma-separated repo-root paths that count as an Expo change (default: "apps/expo/") [env: EXPO_RELEASE_IMPACT_PATHS]
   --ignore-expo-impact <true|false>                                        Check the fingerprint even when no impact path changed (default: "false") [env: EXPO_RELEASE_IGNORE_EXPO_IMPACT]
@@ -49,8 +49,8 @@ Options:
 
 Global options:
   --profile <string>                                                       EAS build profile, also the default update channel [env: EXPO_RELEASE_PROFILE]
-  --base <string>                                                          Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE) [env: EXPO_RELEASE_BASE]
-  --head <string>                                                          Git head SHA for the impact diff (falls back to GITHUB_SHA) [env: EXPO_RELEASE_HEAD]
+  --base <string>                                                          Git base SHA for the impact diff [env: EXPO_RELEASE_BASE, GITHUB_EVENT_BEFORE]
+  --head <string>                                                          Git head SHA for the impact diff [env: EXPO_RELEASE_HEAD, GITHUB_SHA]
   --platform <ios|android>                                                 Native platform (default: "ios") [env: EXPO_RELEASE_PLATFORM]
   --impact-paths <string>                                                  Comma-separated repo-root paths that count as an Expo change (default: "apps/expo/") [env: EXPO_RELEASE_IMPACT_PATHS]
   --ignore-expo-impact <true|false>                                        Check the fingerprint even when no impact path changed (default: "false") [env: EXPO_RELEASE_IGNORE_EXPO_IMPACT]
@@ -81,8 +81,8 @@ Options:
 
 Global options:
   --profile <string>                                                       EAS build profile, also the default update channel [env: EXPO_RELEASE_PROFILE]
-  --base <string>                                                          Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE) [env: EXPO_RELEASE_BASE]
-  --head <string>                                                          Git head SHA for the impact diff (falls back to GITHUB_SHA) [env: EXPO_RELEASE_HEAD]
+  --base <string>                                                          Git base SHA for the impact diff [env: EXPO_RELEASE_BASE, GITHUB_EVENT_BEFORE]
+  --head <string>                                                          Git head SHA for the impact diff [env: EXPO_RELEASE_HEAD, GITHUB_SHA]
   --platform <ios|android>                                                 Native platform (default: "ios") [env: EXPO_RELEASE_PLATFORM]
   --impact-paths <string>                                                  Comma-separated repo-root paths that count as an Expo change (default: "apps/expo/") [env: EXPO_RELEASE_IMPACT_PATHS]
   --ignore-expo-impact <true|false>                                        Check the fingerprint even when no impact path changed (default: "false") [env: EXPO_RELEASE_IGNORE_EXPO_IMPACT]
@@ -113,8 +113,8 @@ Options:
 
 Global options:
   --profile <string>                                                       EAS build profile, also the default update channel [env: EXPO_RELEASE_PROFILE]
-  --base <string>                                                          Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE) [env: EXPO_RELEASE_BASE]
-  --head <string>                                                          Git head SHA for the impact diff (falls back to GITHUB_SHA) [env: EXPO_RELEASE_HEAD]
+  --base <string>                                                          Git base SHA for the impact diff [env: EXPO_RELEASE_BASE, GITHUB_EVENT_BEFORE]
+  --head <string>                                                          Git head SHA for the impact diff [env: EXPO_RELEASE_HEAD, GITHUB_SHA]
   --platform <ios|android>                                                 Native platform (default: "ios") [env: EXPO_RELEASE_PLATFORM]
   --impact-paths <string>                                                  Comma-separated repo-root paths that count as an Expo change (default: "apps/expo/") [env: EXPO_RELEASE_IMPACT_PATHS]
   --ignore-expo-impact <true|false>                                        Check the fingerprint even when no impact path changed (default: "false") [env: EXPO_RELEASE_IGNORE_EXPO_IMPACT]

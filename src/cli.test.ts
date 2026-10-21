@@ -101,6 +101,23 @@ describe('runs', () => {
 		})
 	})
 
+	test('the action trims padded inputs, as from a YAML block scalar', () => {
+		const result = run([], {
+			EXPO_RELEASE_COMMAND: ' operate\n',
+			EXPO_RELEASE_PROFILE: 'production',
+			EXPO_RELEASE_PLATFORM: ' android\n',
+			EXPO_RELEASE_DEPLOY_TYPE: 'native\n',
+			EXPO_RELEASE_AUTO_SUBMIT: 'false\n',
+			EXPO_RELEASE_DRY_RUN: ' true\n'
+		})
+		expect(result).toMatchObject({
+			exitCode: 0,
+			stdout: 'native-build\n',
+			stderr:
+				'[dry-run] eas build --platform android --profile production --non-interactive --no-wait\n'
+		})
+	})
+
 	test('operate --dry-run prints the EAS command it would run', () => {
 		const result = run([
 			'operate',

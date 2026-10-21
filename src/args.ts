@@ -48,10 +48,16 @@ const text = (env: string) =>
 		.optional()
 		.meta({ env: `EXPO_RELEASE_${env}` })
 
+// hanzio/cli skips blank env values but keeps padding (`platform: |` in YAML adds a newline).
+const trimmed = <T extends z.ZodType>(schema: T) =>
+	z.preprocess(
+		(value) => (typeof value === 'string' ? value.trim() : value),
+		schema
+	)
+
 // `--auto-submit false` takes a value, so these are not boolean switches.
 const trueFalse = (env: string, fallback: 'true' | 'false') =>
-	z
-		.enum(['true', 'false'])
+	trimmed(z.enum(['true', 'false']))
 		.default(fallback)
 		.transform((value) => value === 'true')
 		.meta({ env: `EXPO_RELEASE_${env}` })
@@ -64,14 +70,13 @@ export const releaseFlags = z
 			.min(1)
 			.meta({ env: 'EXPO_RELEASE_PROFILE' })
 			.describe('EAS build profile, also the default update channel'),
-		base: text('BASE').describe(
-			'Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE)'
-		),
-		head: text('HEAD').describe(
-			'Git head SHA for the impact diff (falls back to GITHUB_SHA)'
-		),
-		platform: z
-			.enum(['ios', 'android'])
+		base: text('BASE')
+			.meta({ env: ['EXPO_RELEASE_BASE', 'GITHUB_EVENT_BEFORE'] })
+			.describe('Git base SHA for the impact diff'),
+		head: text('HEAD')
+			.meta({ env: ['EXPO_RELEASE_HEAD', 'GITHUB_SHA'] })
+			.describe('Git head SHA for the impact diff'),
+		platform: trimmed(z.enum(['ios', 'android']))
 			.default('ios')
 			.meta({ env: 'EXPO_RELEASE_PLATFORM' })
 			.describe('Native platform'),
@@ -95,19 +100,19 @@ export const releaseFlags = z
 		ignoreExpoImpact: trueFalse('IGNORE_EXPO_IMPACT', 'false').describe(
 			'Check the fingerprint even when no impact path changed'
 		),
-		operation: z
-			.enum([
+		operation: trimmed(
+			z.enum([
 				'deploy',
 				'force-native',
 				'retry-ota',
 				'republish',
 				'rollback-embedded'
 			])
+		)
 			.default('deploy')
 			.meta({ env: 'EXPO_RELEASE_OPERATION' })
 			.describe('What to run'),
-		deployType: z
-			.enum(['none', 'ota', 'native'])
+		deployType: trimmed(z.enum(['none', 'ota', 'native']))
 			.default('none')
 			.meta({ env: 'EXPO_RELEASE_DEPLOY_TYPE' })
 			.describe('Decision type for operate'),
@@ -141,7 +146,14 @@ export const releaseFlags = z
 			'Fingerprint hash to use instead of generating one'
 		),
 		dryRun: z
-			.boolean()
+			.preprocess(
+				// hanzio/cli makes booleans of exact `true`/`false`; this takes padded ones too.
+				(value) =>
+					typeof value === 'string' && /^\s*(true|false)\s*$/.test(value)
+						? value.trim() === 'true'
+						: value,
+				z.boolean()
+			)
 			.meta({ env: 'EXPO_RELEASE_DRY_RUN' })
 			.describe('Print mutating EAS commands without running them')
 	})
@@ -158,13 +170,11 @@ export type ReleaseFlags = z.output<typeof releaseFlags>
 
 export function toReleaseOptions(
 	command: CommandName,
-	{ context: flags, env }: CommandContext<ReleaseFlags>
+	{ context: flags }: CommandContext<ReleaseFlags>
 ): ReleaseOptions {
 	return {
 		...flags,
 		command,
-		base: flags.base ?? env.GITHUB_EVENT_BEFORE,
-		head: flags.head ?? env.GITHUB_SHA,
 		channel: flags.channel ?? flags.profile
 	}
 }

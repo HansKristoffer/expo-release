@@ -1,8 +1,12 @@
 #!/usr/bin/env bun
 
-import { type CommandContext, defineCli, defineCommand } from 'hanzio/cli'
 import {
-	type CommandName,
+	CliUsageError,
+	type CommandContext,
+	defineCli,
+	defineCommand
+} from 'hanzio/cli'
+import {
 	needsDecide,
 	type ReleaseFlags,
 	type ReleaseOptions,
@@ -76,8 +80,6 @@ async function operate(
 	ctx.stdout.write(`${result}\n`)
 }
 
-const COMMANDS: CommandName[] = ['release', 'decide', 'operate']
-
 const cli = defineCli({
 	name: 'expo-release',
 	description:
@@ -85,6 +87,22 @@ const cli = defineCli({
 	// All three commands take the same flags, before or after the command name.
 	globals: releaseFlags,
 	context: (flags) => flags,
+	// The composite action names the command in EXPO_RELEASE_COMMAND and passes no argv.
+	defaultCommand: (env) => env.EXPO_RELEASE_COMMAND?.trim() || undefined,
+	onError: (error, io) => {
+		// With no arguments at all, print help and exit 0.
+		if (
+			error instanceof CliUsageError &&
+			error.kind === 'missing-command' &&
+			process.argv.length <= 2
+		) {
+			io.stdout.write(error.help)
+			return 0
+		}
+		// Bad arguments exit 1, as before hanzio/cli, which uses 2.
+		const code = io.print()
+		return code === 2 ? 1 : code
+	},
 	commands: {
 		release: defineCommand({
 			description: 'Run decide, then operate on its decision',
@@ -112,23 +130,4 @@ const cli = defineCli({
 	}
 })
 
-// GitHub Actions passes an unset input as an empty string; treat it as unset.
-const env = Object.fromEntries(
-	Object.entries(process.env).flatMap(([name, value]) =>
-		value?.trim() ? [[name, value.trim()]] : []
-	)
-)
-
-let argv = process.argv.slice(2)
-if (!argv.some((arg) => COMMANDS.includes(arg as CommandName))) {
-	// The composite action names the command in EXPO_RELEASE_COMMAND and passes no argv.
-	argv = env.EXPO_RELEASE_COMMAND
-		? [env.EXPO_RELEASE_COMMAND, ...argv]
-		: argv.length === 0
-			? ['--help']
-			: argv
-}
-
-const code = await cli.run(argv, { env })
-// Bad arguments exit 1, as before hanzio/cli, which uses 2.
-process.exitCode = code === 2 ? 1 : code
+process.exitCode = await cli.run()
