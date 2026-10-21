@@ -95,10 +95,14 @@ runs:
 
     - uses: planetscale/setup-pscale-action@v1
 
+    # Into the job's temp directory: a global install would replace the
+    # Railway CLI every other job on a self-hosted machine shares.
     - shell: bash
       env:
         VERSION: ${{ inputs.railway-cli-version }}
-      run: npm install -g "@railway/cli@$VERSION"
+      run: |
+        npm install -g --prefix "$RUNNER_TEMP/railway-cli" "@railway/cli@$VERSION"
+        echo "$RUNNER_TEMP/railway-cli/bin" >> "$GITHUB_PATH"
 
     # ---------------------------------------------------------------- create
 

@@ -30,13 +30,18 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: echo "version=$(./node_modules/.bin/playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
 
+    # Hosted runners only: the cache stores a home-relative path that misses on
+    # a self-hosted runner, which keeps ~/.cache/ms-playwright between jobs, and
+    # the install below is a no-op for a browser already there.
     - id: cache
+      if: runner.environment == 'github-hosted'
       uses: actions/cache/restore@v6
       with:
         path: ~/.cache/ms-playwright
         key: ${{ runner.os }}-playwright-${{ steps.version.outputs.version }}-${{ inputs.browsers }}
 
-    # No --with-deps: ubuntu-latest already carries the libraries Chromium needs.
+    # No --with-deps: ubuntu-latest already carries the libraries Chromium needs;
+    # a self-hosted machine is provisioned with them.
     - if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -46,7 +51,7 @@ runs:
 
     # Saved here, not in a post step: actions/cache only saves after success, so
     # a failing test run would never populate it.
-    - if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true'
+    - if: inputs.save-cache == 'true' && runner.environment == 'github-hosted' && steps.cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       continue-on-error: true
       with:

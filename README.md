@@ -540,9 +540,9 @@ Composite actions for Bun monorepos, used as `HansKristoffer/expo-release/.githu
 
 | Action | Does |
 |--------|------|
-| `setup-workspace` | Bun (version from `package.json` `packageManager` by default), optional Node, restore the dependency cache keyed on `bun.lock`, always `bun install --frozen-lockfile`, save on a miss with `save-cache: 'true'`. `cache-paths` and `cache-key-files` are inputs. |
-| `playwright-browsers` | Restores browsers for the installed Playwright version; installs and saves on a miss. |
-| `pr-preview` | Railway preview environment per PR with its own PlanetScale Postgres branch and a Cloudflare-managed host. Creates on open/sync, deletes on close. |
+| `setup-workspace` | Bun (version from `package.json` `packageManager` by default), optional Node, restore the dependency cache keyed on `bun.lock`, always `bun install --frozen-lockfile`, save on a miss with `save-cache: 'true'`. `cache-paths` and `cache-key-files` are inputs. On a self-hosted runner it keeps `cache-paths` instead (see below). |
+| `playwright-browsers` | Restores browsers for the installed Playwright version; installs and saves on a miss. A self-hosted runner skips the cache and keeps `~/.cache/ms-playwright`. |
+| `pr-preview` | Railway preview environment per PR with its own PlanetScale Postgres branch and a Cloudflare-managed host. Creates on open/sync, deletes on close. The Railway CLI goes into the job's `$RUNNER_TEMP`. |
 | `ai-changelog` | Plain-language changelog of a pushed range with Claude; outputs `message` (chat) and `markdown`, optionally POSTs the message to a webhook. |
 
 ### Warm the caches on main
@@ -579,6 +579,29 @@ jobs:
 ```
 
 Use the same `cache-paths` in every job, since they are part of the cache version.
+
+### Self-hosted runners
+
+A self-hosted runner keeps its workspace between jobs, so these actions keep what a hosted VM would restore. Check out with `clean: false`; `setup-workspace` then removes every untracked file except `cache-paths` and `keep-paths`, skips the cache, and skips `bun install` when the files named by `install-key-paths` and the Bun version are unchanged since that runner's last install. Add the files a postinstall reads:
+
+```yaml
+      - uses: actions/checkout@v5
+        with:
+          clean: false
+      - uses: HansKristoffer/expo-release/.github/actions/setup-workspace@v2
+        with:
+          cache-paths: |
+            node_modules
+            packages/*/node_modules
+            apps/*/node_modules
+            packages/prisma/generated
+          keep-paths: .buncargo/typecheck-timings.json
+          install-key-paths: |
+            bun.lock
+            *package.json
+            patches
+            packages/prisma/schema
+```
 
 ### PR preview environments
 
