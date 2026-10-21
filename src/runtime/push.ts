@@ -9,7 +9,7 @@ export interface KeyValueStorage {
 }
 
 export interface PushNotificationsOptions {
-	/** Remembers that the one-time prompt ran. */
+	/** Remembers that the one-time prompt ran and the last token sent. */
 	storage: KeyValueStorage
 	/** Saves this device's Expo push token on your backend; `null` removes it. */
 	registerDevice: (token: string | null) => Promise<void>
@@ -28,6 +28,8 @@ export interface PushNotificationsOptions {
 	/** How notifications show while the app is in the foreground. */
 	foregroundBehavior?: Notifications.NotificationBehavior
 	storageKey?: string
+	/** Holds the last token passed to `registerDevice`. */
+	tokenStorageKey?: string
 }
 
 export interface NotificationListeners {
@@ -50,7 +52,8 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 		onUnavailable,
 		onError = (message, error) => console.error(message, error),
 		projectId,
-		storageKey = '@notifications_permission_asked'
+		storageKey = '@notifications_permission_asked',
+		tokenStorageKey = '@notifications_push_token'
 	} = options
 
 	Notifications.setNotificationHandler({
@@ -78,12 +81,24 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 
 	const getPermissionStatus = () => Notifications.getPermissionsAsync()
 
-	async function hasPrompted() {
+	async function read(key: string) {
 		try {
-			return (await storage.getItem(storageKey)) === 'true'
+			return await storage.getItem(key)
 		} catch {
-			return false
+			return null
 		}
+	}
+
+	async function rememberToken(token: string) {
+		try {
+			await storage.setItem(tokenStorageKey, token)
+		} catch (error) {
+			onError('Failed to remember the push token', error)
+		}
+	}
+
+	async function hasPrompted() {
+		return (await read(storageKey)) === 'true'
 	}
 
 	/** Shows the OS dialog when it still can. Resolves whether push is allowed. */
@@ -102,11 +117,13 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 		}
 	}
 
-	async function getPushToken() {
+	async function getPushToken(devicePushToken?: Notifications.DevicePushToken) {
 		if (!Device.isDevice) return null
 		try {
 			const token = await Notifications.getExpoPushTokenAsync(
-				projectId ? { projectId } : undefined
+				projectId || devicePushToken
+					? { projectId, devicePushToken }
+					: undefined
 			)
 			return token.data
 		} catch (error) {
@@ -115,18 +132,33 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 		}
 	}
 
-	/** Registers the current token. Resolves whether one was registered. */
-	async function syncToken() {
-		if (!(await getPermissionStatus()).granted) return false
-		const token = await getPushToken()
-		if (!token) return false
+	async function sendToken(token: string) {
 		try {
 			await registerDevice(token)
-			return true
 		} catch (error) {
 			onError('Failed to register the push token', error)
 			return false
 		}
+		await rememberToken(token)
+		return true
+	}
+
+	/** Registers the current token. Resolves whether one was registered. */
+	async function syncToken() {
+		if (!(await getPermissionStatus()).granted) return false
+		const token = await getPushToken()
+		return token ? sendToken(token) : false
+	}
+
+	/**
+	 * Re-registers a token that changed since it was last sent. Runs only while
+	 * push is on for this device: a token was sent and `disable()` has not run.
+	 */
+	async function refreshToken(devicePushToken?: Notifications.DevicePushToken) {
+		const sent = await read(tokenStorageKey)
+		if (!sent || !(await getPermissionStatus()).granted) return
+		const token = await getPushToken(devicePushToken)
+		if (token && token !== sent) await sendToken(token)
 	}
 
 	async function runPrompt() {
@@ -174,13 +206,24 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 		},
 
 		/** Removes this device's token from your backend. */
-		disable() {
-			return registerDevice(null)
+		async disable() {
+			await registerDevice(null)
+			// KeyValueStorage has no removeItem; an empty token means none was sent.
+			await rememberToken('')
 		},
 
-		/** Subscribes to notifications. Returns the unsubscribe function. */
-		listen({ onReceived, onResponse }: NotificationListeners) {
+		/**
+		 * Subscribes to notifications and keeps the registered token current: on
+		 * start and whenever Expo rotates it. Returns the unsubscribe function.
+		 */
+		listen({ onReceived, onResponse }: NotificationListeners = {}) {
+			const refresh = (devicePushToken?: Notifications.DevicePushToken) =>
+				refreshToken(devicePushToken).catch((error: unknown) =>
+					onError('Failed to refresh the push token', error)
+				)
+			void refresh()
 			const subscriptions = [
+				Notifications.addPushTokenListener(refresh),
 				onReceived && Notifications.addNotificationReceivedListener(onReceived),
 				onResponse &&
 					Notifications.addNotificationResponseReceivedListener(onResponse)
@@ -196,26 +239,54 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 	}
 }
 
+export interface UsePushNotificationsOptions {
+	/** The user's saved preference, for example from your API. */
+	enabled?: boolean
+	/**
+	 * Saves the preference. `enable()` and `disable()` call it first and show
+	 * the new value at once; when it rejects, they roll back and rethrow.
+	 */
+	persist?: (enabled: boolean) => Promise<unknown>
+}
+
 /**
  * Push state for a settings screen. `enabled` is the user's saved preference;
  * while it is on, the token is re-registered on mount.
  */
 export function usePushNotifications(
 	push: PushNotifications,
-	{ enabled = false }: { enabled?: boolean } = {}
+	{ enabled = false, persist }: UsePushNotificationsOptions = {}
 ) {
 	const [permission, setPermission] =
 		useState<Notifications.NotificationPermissionsStatus | null>(null)
 	const [isLoading, setIsLoading] = useState(false)
+	// Set by enable/disable until `enabled` catches up with the saved value.
+	const [optimistic, setOptimistic] = useState<boolean | null>(null)
+	const preference = optimistic ?? enabled
 
 	const refresh = useCallback(async () => {
 		setPermission(await push.getPermissionStatus())
 	}, [push])
 
 	useEffect(() => {
+		setOptimistic(null)
 		void refresh()
 		if (enabled) void push.syncToken()
 	}, [push, enabled, refresh])
+
+	const save = useCallback(
+		async (next: boolean) => {
+			if (!persist) return
+			setOptimistic(next)
+			try {
+				await persist(next)
+			} catch (error) {
+				setOptimistic(null)
+				throw error
+			}
+		},
+		[persist]
+	)
 
 	const withLoading = useCallback(
 		<T>(action: () => Promise<T>) =>
@@ -233,11 +304,17 @@ export function usePushNotifications(
 
 	return {
 		permission,
-		isEnabled: enabled && permission?.granted === true,
+		isEnabled: preference && permission?.granted === true,
 		isLoading,
 		prompt: withLoading(push.prompt),
-		enable: withLoading(push.enable),
-		disable: withLoading(push.disable),
+		enable: withLoading(async () => {
+			await save(true)
+			return push.enable()
+		}),
+		disable: withLoading(async () => {
+			await save(false)
+			await push.disable()
+		}),
 		refresh
 	}
 }
