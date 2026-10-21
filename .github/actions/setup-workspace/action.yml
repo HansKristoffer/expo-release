@@ -1,5 +1,8 @@
 name: Setup workspace
-description: Install Bun (and optionally Node), restore the dependency cache and install. Check out the repository first.
+description: >-
+  Install Bun (and optionally Node), restore the dependency cache and install.
+  Check out the repository first; on a self-hosted runner, check out with
+  `clean: false` so node_modules survives between jobs.
 
 inputs:
   bun-version:
@@ -15,7 +18,7 @@ inputs:
     required: false
     default: ''
   cache-paths:
-    description: Newline-separated paths to cache.
+    description: Newline-separated paths to cache. A self-hosted runner keeps them instead of restoring them.
     required: false
     default: |
       node_modules
@@ -29,6 +32,21 @@ inputs:
     description: Save the cache after a miss. Enable on one short job (or a cache-warm workflow on main) so every PR can read it.
     required: false
     default: 'false'
+  keep-paths:
+    description: Newline-separated untracked paths a self-hosted runner keeps besides cache-paths, such as a tool's timings file.
+    required: false
+    default: ''
+  install-key-paths:
+    description: >-
+      Newline-separated git pathspecs of the files the install reads. A
+      self-hosted runner skips the install when none of them, nor the Bun
+      version, changed since its last one. Add what a postinstall reads, such as
+      a Prisma schema.
+    required: false
+    default: |
+      bun.lock
+      *package.json
+      patches
 
 outputs:
   cache-hit:
@@ -38,10 +56,32 @@ outputs:
 runs:
   using: composite
   steps:
+    # A self-hosted runner keeps its workspace between jobs: deleting and
+    # reinstalling node_modules costs about 25 s a job. Everything else
+    # untracked goes, as checkout's own clean would have done.
+    - id: clean
+      if: runner.environment == 'self-hosted'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        KEEP: |
+          ${{ inputs.cache-paths }}
+          ${{ inputs.keep-paths }}
+      run: |
+        excludes=()
+        while IFS= read -r path; do
+          [ -n "$path" ] && excludes+=(-e "$path")
+        done <<< "$KEEP"
+        git clean -ffdxq "${excludes[@]}"
+        if [ -d node_modules ]; then echo "kept-node-modules=true" >> "$GITHUB_OUTPUT"; fi
+
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: ${{ inputs.bun-version }}
         bun-version-file: ${{ inputs.bun-version == '' && inputs.bun-version-file || '' }}
+        # Its cache stores a workspace-relative path that misses on a
+        # self-hosted runner, where ~/.bun/bin/bun stays on the machine anyway.
+        no-cache: ${{ runner.environment == 'self-hosted' }}
 
     - if: inputs.node-version != ''
       uses: actions/setup-node@v7
@@ -49,6 +89,7 @@ runs:
         node-version: ${{ inputs.node-version }}
 
     - id: cache
+      if: steps.clean.outputs.kept-node-modules != 'true'
       uses: actions/cache/restore@v6
       with:
         path: ${{ inputs.cache-paths }}
@@ -58,11 +99,29 @@ runs:
 
     # Install even on a hit: the key covers the lockfile only, so a hit can carry
     # workspace package copies from an older commit. A warm install relinks them.
+    # Kept node_modules skips it when nothing the install reads has changed:
+    # workspace packages are relative links, so they already point here.
     - shell: bash
       working-directory: ${{ github.workspace }}
-      run: bun install --frozen-lockfile
+      env:
+        KEPT_NODE_MODULES: ${{ steps.clean.outputs.kept-node-modules == 'true' }}
+        INSTALL_KEY_PATHS: ${{ inputs.install-key-paths }}
+      run: |
+        pathspecs=()
+        while IFS= read -r path; do
+          [ -n "$path" ] && pathspecs+=("$path")
+        done <<< "$INSTALL_KEY_PATHS"
+        key="$({ git ls-files -s -- "${pathspecs[@]}"; bun --version; } | git hash-object --stdin)"
+        stamp=node_modules/.expo-release-install-key
 
-    - if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true'
+        if [ "$KEPT_NODE_MODULES" = true ] && [ "$(cat "$stamp" 2>/dev/null)" = "$key" ]; then
+          echo "Dependencies unchanged since this runner's last install; skipped."
+          exit 0
+        fi
+        bun install --frozen-lockfile
+        echo "$key" > "$stamp"
+
+    - if: inputs.save-cache == 'true' && steps.clean.outputs.kept-node-modules != 'true' && steps.cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
         path: ${{ inputs.cache-paths }}
