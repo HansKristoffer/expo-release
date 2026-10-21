@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/HansKristoffer/expo-release/compare/v2.2.0...v2.2.1) (2026-10-21)
+
+
+### Miscellaneous Chores
+
+* release 2.2.1 ([#8](https://github.com/HansKristoffer/expo-release/issues/8)) ([95cf86d](https://github.com/HansKristoffer/expo-release/commit/95cf86d56359c9bc2670fb7dcd8e933bb7119c48))
+
 ## [2.2.0](https://github.com/HansKristoffer/expo-release/compare/v2.1.1...v2.2.0) (2026-10-20)
 
 
