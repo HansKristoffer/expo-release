@@ -492,12 +492,30 @@ export const push = createPushNotifications({
 | Member | Use |
 |--------|-----|
 | `prompt()` | After sign-in. Asks once per install (soft-ask, then OS dialog), registers the token on a grant. Never throws; concurrent calls share one dialog. |
-| `enable()` / `disable()` | Settings toggle. `enable` requests permission and registers; `disable` calls `registerDevice(null)`. Save the user's preference yourself, before `enable()`: a denied dialog then leaves the preference on with `isEnabled` false, and the token registers on the next mount once permission is granted in device settings. |
-| `syncToken()` | Re-registers the current token when permission is granted. |
-| `listen({ onReceived, onResponse })` | Subscribes and returns the unsubscribe function. `onResponse` also receives the tap that launched the app. |
+| `enable()` / `disable()` | Settings toggle. `enable` requests permission and registers; `disable` calls `registerDevice(null)`. Use `disable()` to turn push off (also on sign-out) so the token is not re-sent on the next launch. |
+| `syncToken()` | Registers the current token when permission is granted. |
+| `listen({ onReceived, onResponse })` | Subscribes and returns the unsubscribe function. `onResponse` also receives the tap that launched the app. Also keeps the token current: on start and whenever Expo rotates it, a token that differs from the last one sent is registered again. This runs only after a token was sent and `disable()` has not run since. Call it once at the root of the app. |
 | `getPermissionStatus()`, `getPushToken()`, `requestPermissions()`, `hasPrompted()` | Lower-level steps. |
 
-`usePushNotifications(push, { enabled })` gives a settings screen `permission`, `isEnabled`, `isLoading` and wrapped `prompt`/`enable`/`disable`. `enabled` is the saved preference; while it is on, the token is re-registered on mount.
+`usePushNotifications(push, { enabled, persist })` gives a settings screen `permission`, `isEnabled`, `isLoading` and wrapped `prompt`/`enable`/`disable`. `enabled` is the saved preference; while it is on, the token is re-registered on mount.
+
+`persist` saves the preference, for example on the user's account. `enable()` and `disable()` call it first and show the new value right away. If it rejects, the hook restores `enabled`, skips the push step and rethrows, so catch it for your error toast. Saving before `enable()` means a denied dialog leaves the preference on with `isEnabled` false; the token registers on the next mount once permission is granted in device settings. Without `persist`, save the preference yourself before calling `enable()`.
+
+```tsx
+const { isEnabled, isLoading, enable, disable } = usePushNotifications(push, {
+  enabled: user.pushEnabled,
+  persist: (pushEnabled) => api.user.update({ pushEnabled })
+})
+
+const onToggle = async (on: boolean) => {
+  try {
+    if (!on) return await disable()
+    if (!(await enable())) toast('Allow notifications in device settings')
+  } catch {
+    toast('Could not save your notification setting')
+  }
+}
+```
 
 ### Error boundary
 

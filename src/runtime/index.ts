@@ -15,5 +15,6 @@ export {
 	type NotificationListeners,
 	type PushNotifications,
 	type PushNotificationsOptions,
+	type UsePushNotificationsOptions,
 	usePushNotifications
 } from './push'
