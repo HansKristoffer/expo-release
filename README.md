@@ -70,7 +70,7 @@ Reference the upstream README for full input/output docs and recovery operations
 uses: HansKristoffer/expo-release@v2
 ```
 
-The action runs `bun ${{ github.action_path }}/src/cli.ts`. The caller must already have checked out the repo (`fetch-depth: 0`), installed Bun, set up EAS, and installed workspace dependencies.
+The action installs its own dependencies (`hanzio`, `zod`) in `${{ github.action_path }}`, then runs `bun ${{ github.action_path }}/src/cli.ts`. The caller must already have checked out the repo (`fetch-depth: 0`), installed Bun, set up EAS, and installed workspace dependencies.
 
 ### npm (CLI)
 
@@ -424,6 +424,8 @@ expo-release operate \
   [--update-extra-args "--private-key-path key"] \
   [--post-update "bunx posthog-cli hermes upload --directory dist"]
 ```
+
+Run `expo-release <command> --help` for every flag. Each flag also reads `EXPO_RELEASE_<FLAG>` (for example `EXPO_RELEASE_IMPACT_PATHS`) when it is not passed; an empty value counts as unset.
 
 `release` is decide + operate (same as the action default). `force-native`, `republish`, and `rollback-embedded` skip decide. `decide` prints JSON including `deployType` and `nativeBuildPending`. When `GITHUB_OUTPUT` is set, decide writes `deploy_type`, `native_build_pending`, `changed`, `fingerprint`, `build_id`, `build_url`. Operate writes `result`.
 

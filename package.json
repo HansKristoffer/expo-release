@@ -57,6 +57,10 @@
 		"typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.runtime.json",
 		"verify:package": "node scripts/verify-package.mjs"
 	},
+	"dependencies": {
+		"hanzio": "^3.1.0",
+		"zod": "^4.3.6"
+	},
 	"peerDependencies": {
 		"expo-device": ">=55",
 		"expo-notifications": ">=55",
