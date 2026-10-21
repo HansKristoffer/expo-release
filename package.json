@@ -58,7 +58,7 @@
 		"verify:package": "node scripts/verify-package.mjs"
 	},
 	"dependencies": {
-		"hanzio": "^3.1.0",
+		"hanzio": "^3.3.0",
 		"zod": "^4.3.6"
 	},
 	"peerDependencies": {
