@@ -1,0 +1,158 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`help prints root help with no arguments 1`] = `
+"expo-release
+Fingerprint-driven Expo EAS release: OTA update or native store build
+
+Usage: expo-release <command> [options]
+
+Commands:
+  release                Run decide, then operate on its decision
+  decide                 Print whether this change needs no deploy, an OTA update or a native build
+  operate                Run --operation for --deploy-type
+  completion <bash|zsh>  Print a shell completion script
+
+Options:
+  --profile <string>                                                       EAS build profile, also the default update channel [env: EXPO_RELEASE_PROFILE]
+  --base <string>                                                          Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE) [env: EXPO_RELEASE_BASE]
+  --head <string>                                                          Git head SHA for the impact diff (falls back to GITHUB_SHA) [env: EXPO_RELEASE_HEAD]
+  --platform <ios|android>                                                 Native platform (default: "ios") [env: EXPO_RELEASE_PLATFORM]
+  --impact-paths <string>                                                  Comma-separated repo-root paths that count as an Expo change (default: "apps/expo/") [env: EXPO_RELEASE_IMPACT_PATHS]
+  --ignore-expo-impact <true|false>                                        Check the fingerprint even when no impact path changed (default: "false") [env: EXPO_RELEASE_IGNORE_EXPO_IMPACT]
+  --operation <deploy|force-native|retry-ota|republish|rollback-embedded>  What to run (default: "deploy") [env: EXPO_RELEASE_OPERATION]
+  --deploy-type <none|ota|native>                                          Decision type for operate (default: "none") [env: EXPO_RELEASE_DEPLOY_TYPE]
+  --channel <string>                                                       EAS Update channel (default: the profile) [env: EXPO_RELEASE_CHANNEL]
+  --environment <string>                                                   EAS environment for eas update (required for Expo SDK 55+) [env: EXPO_RELEASE_ENVIRONMENT]
+  --auto-submit <true|false>                                               Pass --auto-submit on native builds (default: "true") [env: EXPO_RELEASE_AUTO_SUBMIT]
+  --pre-update <string>                                                    Shell command run before eas update [env: EXPO_RELEASE_PRE_UPDATE]
+  --post-update <string>                                                   Shell command run after a successful eas update [env: EXPO_RELEASE_POST_UPDATE]
+  --update-extra-args <string>                                             Extra tokens appended to eas update [env: EXPO_RELEASE_UPDATE_EXTRA_ARGS]
+  --export-source-maps <true|false>                                        On OTA, expo export with external source maps, then publish dist (default: "false") [env: EXPO_RELEASE_EXPORT_SOURCE_MAPS]
+  --group <string>                                                         Update group ID for --operation republish [env: EXPO_RELEASE_GROUP]
+  --runtime-version <string>                                               Runtime version for rollback-embedded (default: the fingerprint) [env: EXPO_RELEASE_RUNTIME_VERSION]
+  --message <string>                                                       Override the eas update message [env: EXPO_RELEASE_MESSAGE]
+  --fingerprint <string>                                                   Fingerprint hash to use instead of generating one [env: EXPO_RELEASE_FINGERPRINT]
+  --dry-run                                                                Print mutating EAS commands without running them [env: EXPO_RELEASE_DRY_RUN]
+  -h, --help                                                               Show help
+
+Run "expo-release <command> --help" for a command's options.
+"
+`;
+
+exports[`help release 1`] = `
+"Usage: expo-release release [options]
+
+Run decide, then operate on its decision
+
+Options:
+  -h, --help  Show help
+
+Global options:
+  --profile <string>                                                       EAS build profile, also the default update channel [env: EXPO_RELEASE_PROFILE]
+  --base <string>                                                          Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE) [env: EXPO_RELEASE_BASE]
+  --head <string>                                                          Git head SHA for the impact diff (falls back to GITHUB_SHA) [env: EXPO_RELEASE_HEAD]
+  --platform <ios|android>                                                 Native platform (default: "ios") [env: EXPO_RELEASE_PLATFORM]
+  --impact-paths <string>                                                  Comma-separated repo-root paths that count as an Expo change (default: "apps/expo/") [env: EXPO_RELEASE_IMPACT_PATHS]
+  --ignore-expo-impact <true|false>                                        Check the fingerprint even when no impact path changed (default: "false") [env: EXPO_RELEASE_IGNORE_EXPO_IMPACT]
+  --operation <deploy|force-native|retry-ota|republish|rollback-embedded>  What to run (default: "deploy") [env: EXPO_RELEASE_OPERATION]
+  --deploy-type <none|ota|native>                                          Decision type for operate (default: "none") [env: EXPO_RELEASE_DEPLOY_TYPE]
+  --channel <string>                                                       EAS Update channel (default: the profile) [env: EXPO_RELEASE_CHANNEL]
+  --environment <string>                                                   EAS environment for eas update (required for Expo SDK 55+) [env: EXPO_RELEASE_ENVIRONMENT]
+  --auto-submit <true|false>                                               Pass --auto-submit on native builds (default: "true") [env: EXPO_RELEASE_AUTO_SUBMIT]
+  --pre-update <string>                                                    Shell command run before eas update [env: EXPO_RELEASE_PRE_UPDATE]
+  --post-update <string>                                                   Shell command run after a successful eas update [env: EXPO_RELEASE_POST_UPDATE]
+  --update-extra-args <string>                                             Extra tokens appended to eas update [env: EXPO_RELEASE_UPDATE_EXTRA_ARGS]
+  --export-source-maps <true|false>                                        On OTA, expo export with external source maps, then publish dist (default: "false") [env: EXPO_RELEASE_EXPORT_SOURCE_MAPS]
+  --group <string>                                                         Update group ID for --operation republish [env: EXPO_RELEASE_GROUP]
+  --runtime-version <string>                                               Runtime version for rollback-embedded (default: the fingerprint) [env: EXPO_RELEASE_RUNTIME_VERSION]
+  --message <string>                                                       Override the eas update message [env: EXPO_RELEASE_MESSAGE]
+  --fingerprint <string>                                                   Fingerprint hash to use instead of generating one [env: EXPO_RELEASE_FINGERPRINT]
+  --dry-run                                                                Print mutating EAS commands without running them [env: EXPO_RELEASE_DRY_RUN]
+"
+`;
+
+exports[`help decide 1`] = `
+"Usage: expo-release decide [options]
+
+Print whether this change needs no deploy, an OTA update or a native build
+
+Options:
+  -h, --help  Show help
+
+Global options:
+  --profile <string>                                                       EAS build profile, also the default update channel [env: EXPO_RELEASE_PROFILE]
+  --base <string>                                                          Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE) [env: EXPO_RELEASE_BASE]
+  --head <string>                                                          Git head SHA for the impact diff (falls back to GITHUB_SHA) [env: EXPO_RELEASE_HEAD]
+  --platform <ios|android>                                                 Native platform (default: "ios") [env: EXPO_RELEASE_PLATFORM]
+  --impact-paths <string>                                                  Comma-separated repo-root paths that count as an Expo change (default: "apps/expo/") [env: EXPO_RELEASE_IMPACT_PATHS]
+  --ignore-expo-impact <true|false>                                        Check the fingerprint even when no impact path changed (default: "false") [env: EXPO_RELEASE_IGNORE_EXPO_IMPACT]
+  --operation <deploy|force-native|retry-ota|republish|rollback-embedded>  What to run (default: "deploy") [env: EXPO_RELEASE_OPERATION]
+  --deploy-type <none|ota|native>                                          Decision type for operate (default: "none") [env: EXPO_RELEASE_DEPLOY_TYPE]
+  --channel <string>                                                       EAS Update channel (default: the profile) [env: EXPO_RELEASE_CHANNEL]
+  --environment <string>                                                   EAS environment for eas update (required for Expo SDK 55+) [env: EXPO_RELEASE_ENVIRONMENT]
+  --auto-submit <true|false>                                               Pass --auto-submit on native builds (default: "true") [env: EXPO_RELEASE_AUTO_SUBMIT]
+  --pre-update <string>                                                    Shell command run before eas update [env: EXPO_RELEASE_PRE_UPDATE]
+  --post-update <string>                                                   Shell command run after a successful eas update [env: EXPO_RELEASE_POST_UPDATE]
+  --update-extra-args <string>                                             Extra tokens appended to eas update [env: EXPO_RELEASE_UPDATE_EXTRA_ARGS]
+  --export-source-maps <true|false>                                        On OTA, expo export with external source maps, then publish dist (default: "false") [env: EXPO_RELEASE_EXPORT_SOURCE_MAPS]
+  --group <string>                                                         Update group ID for --operation republish [env: EXPO_RELEASE_GROUP]
+  --runtime-version <string>                                               Runtime version for rollback-embedded (default: the fingerprint) [env: EXPO_RELEASE_RUNTIME_VERSION]
+  --message <string>                                                       Override the eas update message [env: EXPO_RELEASE_MESSAGE]
+  --fingerprint <string>                                                   Fingerprint hash to use instead of generating one [env: EXPO_RELEASE_FINGERPRINT]
+  --dry-run                                                                Print mutating EAS commands without running them [env: EXPO_RELEASE_DRY_RUN]
+"
+`;
+
+exports[`help operate 1`] = `
+"Usage: expo-release operate [options]
+
+Run --operation for --deploy-type
+
+Options:
+  -h, --help  Show help
+
+Global options:
+  --profile <string>                                                       EAS build profile, also the default update channel [env: EXPO_RELEASE_PROFILE]
+  --base <string>                                                          Git base SHA for the impact diff (falls back to GITHUB_EVENT_BEFORE) [env: EXPO_RELEASE_BASE]
+  --head <string>                                                          Git head SHA for the impact diff (falls back to GITHUB_SHA) [env: EXPO_RELEASE_HEAD]
+  --platform <ios|android>                                                 Native platform (default: "ios") [env: EXPO_RELEASE_PLATFORM]
+  --impact-paths <string>                                                  Comma-separated repo-root paths that count as an Expo change (default: "apps/expo/") [env: EXPO_RELEASE_IMPACT_PATHS]
+  --ignore-expo-impact <true|false>                                        Check the fingerprint even when no impact path changed (default: "false") [env: EXPO_RELEASE_IGNORE_EXPO_IMPACT]
+  --operation <deploy|force-native|retry-ota|republish|rollback-embedded>  What to run (default: "deploy") [env: EXPO_RELEASE_OPERATION]
+  --deploy-type <none|ota|native>                                          Decision type for operate (default: "none") [env: EXPO_RELEASE_DEPLOY_TYPE]
+  --channel <string>                                                       EAS Update channel (default: the profile) [env: EXPO_RELEASE_CHANNEL]
+  --environment <string>                                                   EAS environment for eas update (required for Expo SDK 55+) [env: EXPO_RELEASE_ENVIRONMENT]
+  --auto-submit <true|false>                                               Pass --auto-submit on native builds (default: "true") [env: EXPO_RELEASE_AUTO_SUBMIT]
+  --pre-update <string>                                                    Shell command run before eas update [env: EXPO_RELEASE_PRE_UPDATE]
+  --post-update <string>                                                   Shell command run after a successful eas update [env: EXPO_RELEASE_POST_UPDATE]
+  --update-extra-args <string>                                             Extra tokens appended to eas update [env: EXPO_RELEASE_UPDATE_EXTRA_ARGS]
+  --export-source-maps <true|false>                                        On OTA, expo export with external source maps, then publish dist (default: "false") [env: EXPO_RELEASE_EXPORT_SOURCE_MAPS]
+  --group <string>                                                         Update group ID for --operation republish [env: EXPO_RELEASE_GROUP]
+  --runtime-version <string>                                               Runtime version for rollback-embedded (default: the fingerprint) [env: EXPO_RELEASE_RUNTIME_VERSION]
+  --message <string>                                                       Override the eas update message [env: EXPO_RELEASE_MESSAGE]
+  --fingerprint <string>                                                   Fingerprint hash to use instead of generating one [env: EXPO_RELEASE_FINGERPRINT]
+  --dry-run                                                                Print mutating EAS commands without running them [env: EXPO_RELEASE_DRY_RUN]
+"
+`;
+
+exports[`runs decide prints the decision and writes its outputs 1`] = `
+"deploy_type<<EOF
+none
+EOF
+native_build_pending<<EOF
+false
+EOF
+changed<<EOF
+false
+EOF
+fingerprint<<EOF
+
+EOF
+build_id<<EOF
+
+EOF
+build_url<<EOF
+
+EOF
+"
+`;
