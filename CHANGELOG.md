@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/HansKristoffer/expo-release/compare/v2.3.0...v2.3.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **actions:** setup-workspace, pr-preview and playwright-browsers work on self-hosted runners ([#12](https://github.com/HansKristoffer/expo-release/issues/12)) ([0bbc4cd](https://github.com/HansKristoffer/expo-release/commit/0bbc4cd039d1dd4049b6fd6dd739f05dd9253853))
+
 ## [2.3.0](https://github.com/HansKristoffer/expo-release/compare/v2.2.1...v2.3.0) (2026-10-21)
 
 
