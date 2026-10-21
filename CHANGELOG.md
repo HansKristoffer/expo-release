@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.2](https://github.com/HansKristoffer/expo-release/compare/v2.3.1...v2.3.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **cli:** drop the cli.run() shims with hanzio 3.3 ([#14](https://github.com/HansKristoffer/expo-release/issues/14)) ([0bacb10](https://github.com/HansKristoffer/expo-release/commit/0bacb106d2a3b2463d4992b797aac7df4e2fe18b))
+
 ## [2.3.1](https://github.com/HansKristoffer/expo-release/compare/v2.3.0...v2.3.1) (2026-10-21)
 
 
