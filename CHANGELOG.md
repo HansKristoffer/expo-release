@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/HansKristoffer/expo-release/compare/v2.2.1...v2.3.0) (2026-10-21)
+
+
+### Features
+
+* **runtime:** refresh the push token on start and rotation, add persist to usePushNotifications ([#10](https://github.com/HansKristoffer/expo-release/issues/10)) ([5bdb6a5](https://github.com/HansKristoffer/expo-release/commit/5bdb6a54491a6bfd52797be09d436135d7acf26b))
+
 ## [2.2.1](https://github.com/HansKristoffer/expo-release/compare/v2.2.0...v2.2.1) (2026-10-21)
 
 
