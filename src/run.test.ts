@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { runCaptured } from './run'
+import {
+	CommandError,
+	parseJsonDocument,
+	runCaptured,
+	runInherited,
+	StageError,
+	stage
+} from './run'
 
 describe('runCaptured', () => {
 	test('a failure reports the exit code, stderr and stdout', async () => {
@@ -24,5 +31,61 @@ describe('runCaptured', () => {
 		expect(error.message).toContain('150 earlier lines omitted')
 		expect(error.message).toContain('\n250')
 		expect(error.message).not.toContain('\n150\n')
+	})
+})
+
+describe('runInherited', () => {
+	test('resolves stdout and keeps the last lines of a failure', async () => {
+		expect(await runInherited(['sh', '-c', 'echo built'])).toBe('built\n')
+
+		const error = await runInherited([
+			'sh',
+			'-c',
+			'echo queued; echo "Credentials are not set up." >&2; exit 1'
+		]).catch((e) => e)
+		expect(error).toBeInstanceOf(CommandError)
+		expect(error.message).toContain('(output above)')
+		expect([...error.tail].sort()).toEqual([
+			'Credentials are not set up.',
+			'queued'
+		])
+	})
+})
+
+describe('a background process left by a command', () => {
+	test('does not hold the run open', async () => {
+		const started = performance.now()
+		expect(await runInherited(['bash', '-c', 'echo hi; sleep 5 &'])).toBe(
+			'hi\n'
+		)
+		expect(performance.now() - started).toBeLessThan(3000)
+	})
+})
+
+describe('parseJsonDocument', () => {
+	test('reads the last document and returns what came before it', () => {
+		expect(
+			parseJsonDocument(
+				'Warning: config failed\nfalling back\n{\n  "hash": "a"\n}\n'
+			)
+		).toEqual({
+			value: { hash: 'a' },
+			preamble: 'Warning: config failed\nfalling back'
+		})
+		expect(parseJsonDocument('[{"id":1}]')).toEqual({
+			value: [{ id: 1 }],
+			preamble: ''
+		})
+	})
+})
+
+describe('stage', () => {
+	test('names the failed step', async () => {
+		const error = await stage('native build', () =>
+			runCaptured(['sh', '-c', 'echo nope >&2; exit 2'])
+		).catch((e) => e)
+		expect(error).toBeInstanceOf(StageError)
+		expect(error.stage).toBe('native build')
+		expect(error.tail).toEqual(['nope'])
 	})
 })

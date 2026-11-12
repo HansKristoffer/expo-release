@@ -1,12 +1,15 @@
 import { exists } from 'node:fs/promises'
 import type { ReleasePlatform } from './args'
+import { localBin } from './run'
 
 export const SOURCE_MAP_OUTPUT_DIR = 'dist'
 
+/** `EXPO_BIN`, else the app's own expo CLI, else `bunx expo`. */
 export function expoCommand(...args: string[]): string[] {
 	const bin = process.env.EXPO_BIN?.trim()
 	if (bin && bin.length > 0) return [bin, ...args]
-	return ['bunx', 'expo', ...args]
+	const local = localBin('expo')
+	return local ? [local, ...args] : ['bunx', 'expo', ...args]
 }
 
 export function sourceMapExportCommand(platform: ReleasePlatform): string[] {

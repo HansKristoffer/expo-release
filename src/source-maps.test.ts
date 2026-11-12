@@ -8,11 +8,14 @@ import {
 } from './source-maps'
 
 describe('expoCommand', () => {
-	test('defaults to bunx expo', () => {
+	test("prefers the app's own expo CLI", () => {
 		const previous = process.env.EXPO_BIN
 		delete process.env.EXPO_BIN
 		try {
-			expect(expoCommand('export')).toEqual(['bunx', 'expo', 'export'])
+			expect(expoCommand('export')).toEqual([
+				`${process.cwd()}/node_modules/.bin/expo`,
+				'export'
+			])
 		} finally {
 			if (previous === undefined) {
 				delete process.env.EXPO_BIN
@@ -43,8 +46,7 @@ describe('sourceMapExportCommand', () => {
 		delete process.env.EXPO_BIN
 		try {
 			expect(sourceMapExportCommand('ios')).toEqual([
-				'bunx',
-				'expo',
+				...expoCommand(),
 				'export',
 				'--platform',
 				'ios',

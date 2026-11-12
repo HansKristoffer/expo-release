@@ -3,8 +3,10 @@ import {
 	operateRelease,
 	parseExpoSdkMajor,
 	requireEnvironmentIfNeeded,
+	splitArgs,
 	updateMessage
 } from './operate'
+import { expoCommand } from './source-maps'
 
 const productionOperate = {
 	profile: 'production',
@@ -170,6 +172,44 @@ describe('operateRelease', () => {
 		expect(commands[0]).not.toContain('update')
 	})
 
+	test('reports the build it queued', async () => {
+		const queued: unknown[] = []
+		const result = await operateRelease(
+			{
+				...productionOperate,
+				deployType: 'native',
+				operation: 'deploy',
+				onQueuedBuild: (build) => queued.push(build)
+			},
+			async () =>
+				JSON.stringify([
+					{
+						id: 'queued_1',
+						status: 'NEW',
+						project: { slug: 'app', ownerAccount: { name: 'me' } }
+					}
+				])
+		)
+		expect(result).toBe('native-build')
+		expect(queued).toEqual([
+			{
+				id: 'queued_1',
+				status: 'new',
+				buildUrl: 'https://expo.dev/accounts/me/projects/app/builds/queued_1'
+			}
+		])
+	})
+
+	test('a failed native build names its stage', async () => {
+		const error = await operateRelease(
+			{ ...productionOperate, deployType: 'native', operation: 'deploy' },
+			async () => {
+				throw new Error('Credentials are not set up.')
+			}
+		).catch((e) => e)
+		expect(error.stage).toBe('native build')
+	})
+
 	test('skips auto-submit when disabled', async () => {
 		const commands: string[][] = []
 		await operateRelease(
@@ -309,8 +349,7 @@ describe('operateRelease', () => {
 		expect(result).toBe('ota')
 		expect(commands).toEqual([
 			[
-				'bunx',
-				'expo',
+				...expoCommand(),
 				'export',
 				'--platform',
 				'ios',
@@ -559,5 +598,23 @@ describe('operateRelease', () => {
 		expect(commands[0]).toContain('production')
 		expect(commands[0]).toContain('--auto-submit')
 		expect(commands[0]).toContain('--no-wait')
+	})
+})
+
+describe('splitArgs', () => {
+	test('keeps quoted values together', () => {
+		expect(
+			splitArgs(`--input-dir dist --message "fix: a b" --x 'c d' --y "q\\"x"`)
+		).toEqual([
+			'--input-dir',
+			'dist',
+			'--message',
+			'fix: a b',
+			'--x',
+			'c d',
+			'--y',
+			'q"x'
+		])
+		expect(splitArgs(undefined)).toEqual([])
 	})
 })

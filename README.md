@@ -13,8 +13,9 @@ decide — git diff + eas fingerprint:generate + eas build:list
      ├─ no matching impact paths → skip
      ├─ finished native build with this fingerprint → eas update
      ├─ matching native build in progress → OTA only
-     ├─ newest matching build errored → fail (use force-native after fixing)
+     ├─ newest matching build errored → fail with EAS's error and the build link
      └─ no matching native build → eas build --auto-submit --no-wait
+                                    (and name the fingerprint sources that changed)
 ```
 
 ## Install and requirements
@@ -24,7 +25,11 @@ bun add -D expo-release
 bunx expo-release --help
 ```
 
-The CLI and GitHub Action require Bun. EAS operations also need an authenticated Expo account and the EAS CLI in the calling project; Expo SDK 55+ OTA updates require an explicit EAS environment. CI verifies Bun 1.4.2. Installing the npm package does not deploy an application.
+The CLI and GitHub Action require Bun. EAS operations also need an authenticated Expo account and the EAS CLI in the calling project; Expo SDK 55+ OTA updates require an EAS environment (from `--environment` or the eas.json build profile). CI verifies Bun 1.4.2. Installing the npm package does not deploy an application.
+
+In GitHub Actions, use the action (`uses: HansKristoffer/expo-release@v2`). It installs its own dependencies (`hanzio`, `zod`) in `${{ github.action_path }}` and runs `bun ${{ github.action_path }}/src/cli.ts`. The caller must already have checked out the repo (`fetch-depth: 0`), installed Bun and installed the workspace dependencies. Elsewhere, run the `expo-release` bin (see [CLI](#cli)).
+
+`eas` and `expo` resolve to the app's own `node_modules/.bin` (searched from the working directory up to the repository root), then to `eas` on `PATH` and `bunx expo`. So the eas-cli version in the app's lockfile is the one that runs; pin it there, and `expo/expo-github-action` is no longer needed. `EAS_BIN` and `EXPO_BIN` override both. `EXPO_TOKEN` must reach the job.
 
 ## Set up with AI
 
@@ -42,16 +47,16 @@ Do the following in this repo:
 2. Ensure the Expo app is ready for fingerprint-based updates:
    - runtimeVersion: { policy: 'fingerprint' } in app config
    - expo-updates installed and configured
-   - channel set on each EAS build profile we deploy
-   - submit config in eas.json if we use auto-submit (iOS ascAppId, Android serviceAccountKeyPath)
+   - channel and environment set on each EAS build profile we deploy, and the variant env vars in the profile's env
+   - submit config in eas.json if we use auto-submit (iOS ascAppId, Android serviceAccountKeyPath from an EAS file secret, never a committed file)
 
 3. Add .github/workflows/expo-release.yml using the HansKristoffer/expo-release@v2 composite action. Adapt consumer-specific values:
    - paths filter: Expo app dir, shared packages that affect the native bundle, and lockfile if native deps should trigger a release
    - working-directory and impact-paths pointing at the Expo app
-   - profile, environment, and channel for each deploy target
-   - env vars required by app.config.ts on the action step (APP_VARIANT, etc.)
+   - profile for each deploy target (channel, environment and env come from eas.json)
    - workflow_dispatch inputs for force-native, retry-ota, republish, rollback-embedded
-   - fetch-depth: 0 on checkout, Bun/Node setup, dependency install, expo/expo-github-action with pinned eas-version and EXPO_TOKEN secret
+   - fetch-depth: 0 on checkout, the setup-workspace action, eas-cli pinned in the app devDependencies, and the EXPO_TOKEN secret
+   - run `bunx expo-release doctor --profile <profile>` from the Expo app and fix what it reports
 
 4. Document that EXPO_TOKEN must be added as a GitHub secret, and that the first run on a new fingerprint always queues a native build.
 
@@ -62,37 +67,18 @@ Do the following in this repo:
 Reference the upstream README for full input/output docs and recovery operations. Ask me only if a required value (Expo app path, deploy branch, profile names) cannot be inferred from the repo.
 ```
 
-## Install
-
-### GitHub Action
-
-```yaml
-uses: HansKristoffer/expo-release@v2
-```
-
-The action installs its own dependencies (`hanzio`, `zod`) in `${{ github.action_path }}`, then runs `bun ${{ github.action_path }}/src/cli.ts`. The caller must already have checked out the repo (`fetch-depth: 0`), installed Bun, set up EAS, and installed workspace dependencies.
-
-### npm (CLI)
-
-For local use or custom CI:
-
-```bash
-bun add -D expo-release
-```
-
-Then run `expo-release` (see [CLI](#cli)).
-
-Pin `eas-cli` with `expo/expo-github-action`. The CLI invokes `eas` from `PATH` (override with `EAS_BIN` for local tests), so that pin is the version that actually runs.
-
 ## Setup checklist
+
+`expo-release doctor --profile <profile>`, run from the Expo app, checks most of this list.
 
 - [ ] GitHub secret `EXPO_TOKEN` from https://expo.dev/settings/access-tokens
 - [ ] `runtimeVersion: { policy: 'fingerprint' }` and `expo-updates` in the Expo app
-- [ ] `eas.json` channel on each profile you deploy (production, staging, …)
+- [ ] `eas.json` `channel` and `environment` on each build profile you deploy (production, staging, …), and the variables `app.config.ts` reads in its `env`
 - [ ] `eas.json` submit config when you use `--auto-submit`:
   - iOS: `submit.<profile>.ios.ascAppId`
-  - Android: `submit.<profile>.android.serviceAccountKeyPath`
-- [ ] EAS credentials (`eas credentials` from the Expo app directory)
+  - Android: `submit.<profile>.android.serviceAccountKeyPath`. Keep the key in an EAS file secret, not in git.
+- [ ] EAS credentials (`eas credentials` from the Expo app directory). A new bundle identifier needs one interactive `eas credentials:configure-build --platform ios --profile <profile>` before CI can build it.
+- [ ] No keystores, `.p8`/`.p12` files, provisioning profiles, service-account JSON, `.expo/` or logs in git. With continuous native generation, `android/` and `ios/` are gitignored too.
 - [ ] At least one finished native build **per profile and platform** on the current fingerprint. The first run against a new app always queues a native build.
 - [ ] `--environment` on every OTA for Expo SDK 55+
 - [ ] Add lockfiles (`bun.lock`, `package-lock.json`) to `impact-paths` if a dependency bump should trigger a fingerprint check. The default `apps/expo/` path does not include the workspace lockfile.
@@ -153,63 +139,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # consumer: only if app.config.ts requires public URLs at eval time
-      EXPO_PUBLIC_API_URL: https://example.com
-      EXPO_PUBLIC_PLATFORM_URL: https://example.com
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          clean: false        # keeps node_modules on a self-hosted runner
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: .bun-version
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
+      # Bun from package.json packageManager, Node to match the eas.json
+      # profile's `node`, the dependency cache and `bun install`. eas-cli comes
+      # from the app's devDependencies.
+      - name: Setup workspace
+        uses: HansKristoffer/expo-release/.github/actions/setup-workspace@v2
         with:
           node-version: 22.12.0
-
-      - name: Restore Bun workspace cache
-        uses: actions/cache@v6
-        with:
-          path: |
-            node_modules
-            packages/*/node_modules
-            apps/*/node_modules
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-
-      - name: Setup Expo and EAS
-        uses: expo/expo-github-action@v8
-        with:
-          eas-version: 16.32.0
-          token: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
 
       - name: Expo release
         uses: HansKristoffer/expo-release@v2
         with:
           command: release
-          profile: production
+          profile: production   # channel, environment and env come from eas.json
           operation: ${{ github.event.inputs.operation || 'deploy' }}
-          environment: production
           impact-paths: apps/expo/
           working-directory: apps/expo
           group: ${{ github.event.inputs.group }}
           runtime-version: ${{ github.event.inputs.runtime-version }}
-        env:
-          # Set variant keys on the action step (or the job). They must reach
-          # fingerprint:generate, build:list, eas build, and eas update.
-          APP_VARIANT: production
-          SECRETS_ENV: production
-          APS_ENVIRONMENT: production
 ```
+
+The release reads `build.<profile>` from `eas.json` in `working-directory` (following `extends`, like eas-cli): its `channel` is the default for `channel`; on Expo SDK 55+ its `environment` is the default for `environment` (before 55, `--environment` also turns off `.env` loading in `eas update`, so it is never added unasked); and each variable in its `env` that the job has not set is set for every EAS command and hook, as EAS sets them on the build machine. Inputs and variables you set win.
 
 A manual `deploy` from `workflow_dispatch` ignores the impact diff. That is intentional: dispatch after an unrelated commit should still release, not silently skip.
 
@@ -217,20 +175,20 @@ A manual `deploy` from `workflow_dispatch` ignores the impact diff. That is inte
 
 | Input | Default | Notes |
 |-------|---------|--------|
-| `command` | `release` | `release` (decide + operate), `decide` (PR checks), or `operate` |
-| `profile` | `production` | EAS build profile; default update channel |
+| `command` | `release` | `release` (decide + operate), `decide` (PR checks), `operate`, or `doctor` |
+| `profile` | `production` | EAS build profile. Its eas.json `channel`, `environment` and `env` are the defaults |
 | `operation` | `deploy` | See recovery operations below |
 | `deploy-type` | `none` | Used only when `command` is `operate` |
-| `base` / `head` | event before / `GITHUB_SHA` | Git range for the impact diff |
+| `base` / `head` | merge base on a PR, else event before / `GITHUB_SHA` | Git range for the impact diff |
 | `impact-paths` | `apps/expo/` | Comma-separated repo-root prefixes |
-| `environment` | _(empty)_ | Passed to `eas update`. Required for Expo SDK 55+ |
-| `channel` | same as `profile` | EAS Update channel |
+| `environment` | eas.json profile `environment` on SDK 55+ | Passed to `eas update`. Required for Expo SDK 55+ |
+| `channel` | eas.json profile `channel`, else `profile` | EAS Update channel |
 | `platform` | `ios` | `ios` or `android`. Passed through to `eas update` and `eas build` |
 | `auto-submit` | `true` | Native builds use `--auto-submit` |
 | `working-directory` | `apps/expo` | Where `eas` runs |
 | `pre-update` | _(empty)_ | Shell command before `eas update` (OTA only) |
 | `post-update` | _(empty)_ | Shell command after a successful `eas update` (OTA only) |
-| `update-extra-args` | _(empty)_ | Extra tokens appended to `eas update` |
+| `update-extra-args` | _(empty)_ | Extra arguments appended to `eas update`, split like a shell (quotes group) |
 | `export-source-maps` | `false` | OTA only: `expo export --source-maps external`, refuse if `dist` has no `.map`, then `eas update --input-dir dist --skip-bundler`. Pair with `post-update` to upload those maps for PostHog error tracking. |
 | `group` | _(empty)_ | Required when `operation` is `republish` |
 | `runtime-version` | current fingerprint | Used when `operation` is `rollback-embedded` |
@@ -242,14 +200,28 @@ A manual `deploy` from `workflow_dispatch` ignores the impact diff. That is inte
 | Output | Notes |
 |--------|--------|
 | `deploy_type` | Stable PR-check type: `none`, `ota`, `native` |
+| `changed` | `true` unless `deploy_type` is `none` |
+| `reason` | Why: `no-impact-path`, `finished-build`, `build-in-progress`, `no-build-for-fingerprint` |
+| `changed_sources` | For a native decision: fingerprint sources changed since the profile's last finished build (`changed node_modules/expo-camera`), one per line |
 | `native_build_pending` | `true` when a matching native build is still in progress |
 | `fingerprint` | Current EAS fingerprint hash |
 | `build_id` / `build_url` | Matching EAS build, if any |
-| `result` | Operate result (`skipped`, `ota`, `native-build`, `recovery`) |
+| `queued_build_id` / `queued_build_url` | The native build operate queued, if any |
+| `result` | Operate result (`skipped`, `ota`, `native-build`, `recovery`), or `failed` |
+| `failed_stage` | On failure, the step: `fingerprint`, `build list`, `errored build`, `native build`, `ota export`, `ota update`, `pre-update`, `post-update`, `recovery`, `doctor` |
+| `failure` | On failure, the last lines the command printed and a fixed next step for that stage |
+
+### When a release fails
+
+Every EAS command runs as a named stage, and the log shows how long each took. A failure ends with one annotation that names the stage, profile and platform and quotes EAS's last lines, for example `expo-release: native build failed (production, ios): Credentials are not set up.`, without a stack trace. The job summary repeats the last 20 lines and a next step chosen by stage, and `failed_stage` lets a workflow branch on the stage instead of matching EAS's wording.
+
+When `eas fingerprint:generate` prints a warning before its JSON, the app config did not load and eas-cli fell back to its own `@expo/config`. The decision then fails and quotes `expo config`'s error, because that fingerprint may not be the one EAS builds with.
+
+An errored build for the current fingerprint fails the run with EAS's error code and message and the build's dashboard link. Fix it, then dispatch `operation: force-native`.
 
 ### PR checks (decide only)
 
-PR jobs should not operate. Use `command: decide` and comment or gate on `deploy_type`:
+PR jobs usually only decide. Use `command: decide` and comment or gate on `deploy_type`. On a `pull_request` event `base` defaults to the merge base with the PR's base branch, so no merge-base step is needed:
 
 ```yaml
 - uses: HansKristoffer/expo-release@v2
@@ -257,15 +229,9 @@ PR jobs should not operate. Use `command: decide` and comment or gate on `deploy
   with:
     command: decide
     profile: pr-preview   # or production
-    base: ${{ steps.merge-base.outputs.sha }}
-    head: ${{ github.sha }}
-  env:
-    APP_VARIANT: staging
-    SECRETS_ENV: staging
-    APS_ENVIRONMENT: production
 ```
 
-Then use `${{ steps.decision.outputs.deploy_type }}` (`none` / `ota` / `native`).
+Then use `${{ steps.decision.outputs.deploy_type }}` (`none` / `ota` / `native`), `reason`, and for `native` the `changed_sources` that make it native. A PR comment built from them tells the author whether the change needs a store build. A PR job that does build can run `command: release` with `auto-submit: 'false'` and read `queued_build_url`.
 
 The CLI writes the same JSON to stdout, including `deployType`:
 
@@ -274,7 +240,7 @@ bun "${{ github.action_path }}/src/cli.ts" decide \
   --base "$BASE" --head "$HEAD" --profile production
 ```
 
-`Bun.spawn` inherits process env. Set variant keys on the **action step or the job**, never on decide alone. When `app.config.ts` switches slug or bundle identifier on `APP_VARIANT`, every EAS command (`fingerprint:generate`, `build:list`, `eas build`, `eas update`) resolves a different project from that config.
+Every EAS command inherits the process env, including the profile's eas.json `env`. Variables that are not in the profile go on the **action step or the job**. When `app.config.ts` switches slug or bundle identifier on `APP_VARIANT`, every EAS command (`fingerprint:generate`, `build:list`, `eas build`, `eas update`) resolves a different project from that config, so keep it in the profile's `env`.
 
 ### OTA hooks
 
@@ -292,13 +258,9 @@ Use it with PostHog error tracking: the same `dist` bundle that goes to `eas upd
     environment: production
     export-source-maps: 'true'
     post-update: bunx posthog-cli hermes upload --directory dist
-  env:
-    APP_VARIANT: production
-    SECRETS_ENV: production
-    APS_ENVIRONMENT: production
 ```
 
-Override the Expo binary with `EXPO_BIN` (defaults to `bunx expo`). `--dry-run` prints the export command and skips the `.map` check.
+Override the Expo binary with `EXPO_BIN` (defaults to the app's `node_modules/.bin/expo`, else `bunx expo`). `--dry-run` prints the export command and skips the `.map` check.
 
 ### Recovery operations
 
@@ -322,6 +284,41 @@ Override the Expo binary with `EXPO_BIN` (defaults to `bunx expo`). `--dry-run` 
     environment: production
     dry-run: 'true'
 ```
+
+### Doctor
+
+`expo-release doctor --profile <profile>` (or `command: doctor`) prints one line per problem with its fix and exits 1 on an error:
+
+- `eas.json` exists, has the build profile, the profile has a `channel`, and `submit.<profile>` exists when auto-submit is on
+- an EAS environment is known for Expo SDK 55+
+- eas-cli runs and satisfies `eas.json` `cli.version`; `EXPO_TOKEN` is set in CI
+- the running Bun equals the profile's `bun` (error) and Node its `node` (warning)
+- no credentials are committed (`*.keystore` except `debug.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`, service-account JSON), nor `.expo/` or `*.log`
+- committed `android/` or `ios/` are not hidden by `.fingerprintignore`; with config plugins, committed native folders get a warning
+- the app config loads and uses `runtimeVersion: { policy: 'fingerprint' }`
+
+`decide` and `release` run the same checks, except the app config, before their first EAS call and print the findings as warnings without failing.
+
+### Fingerprint config
+
+EAS increments `ios.buildNumber` and `android.versionCode` remotely, so skip `ExpoConfigVersions` and add the app version back: a new store version then needs a native build, not an OTA. With continuous native generation, ignore the native folders so a local prebuild cannot change the fingerprint. `apps/expo/fingerprint.config.js`:
+
+```js
+const { version } = require('./package.json')
+
+/** @type {import('@expo/fingerprint').Config} */
+module.exports = {
+  sourceSkips: [
+    'ExpoConfigRuntimeVersionIfString',
+    'ExpoConfigVersions',
+    'PackageJsonAndroidAndIosScriptsIfNotContainRun'
+  ],
+  extraSources: [{ type: 'contents', id: 'appVersion', contents: version }],
+  ignorePaths: ['ios/**/*', 'android/**/*']
+}
+```
+
+Do not list `android` or `ios` in `.fingerprintignore` while they are committed: EAS builds the committed tree, and a change there would never queue a native build.
 
 ## Multiple apps (staging and production)
 
@@ -350,10 +347,6 @@ jobs:
       - uses: HansKristoffer/expo-release@v2
         with:
           profile: production
-          environment: production
-          channel: production
-        env:
-          APP_VARIANT: production
 
   staging:
     if: github.ref == 'refs/heads/develop'
@@ -362,10 +355,6 @@ jobs:
       - uses: HansKristoffer/expo-release@v2
         with:
           profile: staging
-          environment: staging
-          channel: staging
-        env:
-          APP_VARIANT: staging
 ```
 
 ### One job, matrix
@@ -376,23 +365,15 @@ strategy:
   matrix:
     include:
       - profile: production
-        environment: production
-        variant: production
       - profile: staging
-        environment: staging
-        variant: staging
 
 steps:
   - uses: HansKristoffer/expo-release@v2
     with:
-      profile: ${{ matrix.profile }}
-      environment: ${{ matrix.environment }}
-      channel: ${{ matrix.profile }}
-    env:
-      APP_VARIANT: ${{ matrix.variant }}
+      profile: ${{ matrix.profile }}   # channel, environment, env from eas.json
 ```
 
-`channel` defaults to `profile`. If two profiles should publish to the same channel, set `channel` explicitly and keep `profile` as the EAS build profile.
+`channel` defaults to the profile's eas.json `channel`, then to the profile name. Set `channel` only to publish somewhere the builds do not listen.
 
 ## CLI
 
@@ -423,11 +404,13 @@ expo-release operate \
   [--pre-update "bun scripts/release/tag-dist.ts"] \
   [--update-extra-args "--private-key-path key"] \
   [--post-update "bunx posthog-cli hermes upload --directory dist"]
+
+expo-release doctor --profile production [--platform ios] [--auto-submit true]
 ```
 
 Run `expo-release <command> --help` for every flag. Each flag also reads `EXPO_RELEASE_<FLAG>` (for example `EXPO_RELEASE_IMPACT_PATHS`) when it is not passed; an empty value counts as unset.
 
-`release` is decide + operate (same as the action default). `force-native`, `republish`, and `rollback-embedded` skip decide. `decide` prints JSON including `deployType` and `nativeBuildPending`. When `GITHUB_OUTPUT` is set, decide writes `deploy_type`, `native_build_pending`, `changed`, `fingerprint`, `build_id`, `build_url`. Operate writes `result`.
+`release` is decide + operate (same as the action default). `force-native`, `republish`, and `rollback-embedded` skip decide. `decide` prints JSON including `deployType`, `reason`, `nativeBuildPending` and, for `native`, `fingerprintDiff`. When `GITHUB_OUTPUT` is set, decide writes `deploy_type`, `reason`, `native_build_pending`, `changed`, `fingerprint`, `build_id`, `build_url`, `changed_sources`, `compared_build_url`. Operate writes `result`, `queued_build_id`, `queued_build_url`; a failure writes `result=failed`, `failed_stage` and `failure`.
 
 ```bash
 # local (after bun add -D expo-release)
@@ -436,11 +419,11 @@ expo-release decide --base HEAD^ --head HEAD --profile production
 
 ## App runtime
 
-`expo-release/runtime` has the app side of a release: OTA prompts, push notifications and a render-error boundary. Install the package as a dependency (not `-D`) to use it. `react`, `expo-updates`, `expo-notifications` and `expo-device` are optional peers; the CLI never needs them. The helpers render no UI: pass your toast, dialog and error screen.
+`expo-release/runtime` has the app side of a release: OTA prompts, push notifications and a render-error boundary. Install the package as a dependency (not `-D`) to use it. `react`, `react-native`, `expo-updates`, `expo-notifications` and `expo-device` are optional peers; the CLI never needs them. The helpers render no UI: pass your toast, dialog and error screen.
 
 ### OTA updates
 
-Checks once per launch, downloads a new update and hands you a `reload` for your "Restart" prompt. It is off in development and wherever expo-updates is disabled (Expo Go).
+Checks once per launch, downloads a new update and hands you a `reload` for your "Restart" prompt, once per update. It is off in development and wherever expo-updates is disabled (Expo Go). An app that stays open for days should also check on foreground: `recheckOnForeground: 30` checks again when the app becomes active, at most every 30 minutes. A failed check goes to `onError`, by default `console.warn`.
 
 ```tsx
 import { useOTAUpdates } from 'expo-release/runtime'
@@ -454,12 +437,15 @@ function AppContent() {
       description: 'A new version downloaded. Tap Restart to apply.',
       actionLabel: 'Restart',
       onActionPress: reload
-    })
+    }),
+    { recheckOnForeground: 30 }
   )
 }
 ```
 
-The callback is read through a ref, so an unstable toast function never repeats the check. `checkForOTAUpdate(onUpdateReady)` runs the same check outside React.
+The callback is read through a ref, so an unstable toast function never repeats the check. `checkForOTAUpdate(onUpdateReady)` runs the same check outside React, for example from an error screen's "Update and restart" button.
+
+`getReleaseInfo()` returns `{ updateId, runtimeVersion, channel, createdAt, isEmbeddedLaunch }` for the running release (nulls in Expo Go and for the embedded bundle). Attach it to crash reports and show it on a version screen.
 
 ### Push notifications
 
@@ -492,9 +478,10 @@ export const push = createPushNotifications({
 | Member | Use |
 |--------|-----|
 | `prompt()` | After sign-in. Asks once per install (soft-ask, then OS dialog), registers the token on a grant. Never throws; concurrent calls share one dialog. |
-| `enable()` / `disable()` | Settings toggle. `enable` requests permission and registers; `disable` calls `registerDevice(null)`. Use `disable()` to turn push off (also on sign-out) so the token is not re-sent on the next launch. |
-| `syncToken()` | Registers the current token when permission is granted. |
-| `listen({ onReceived, onResponse })` | Subscribes and returns the unsubscribe function. `onResponse` also receives the tap that launched the app. Also keeps the token current: on start and whenever Expo rotates it, a token that differs from the last one sent is registered again. This runs only after a token was sent and `disable()` has not run since. Call it once at the root of the app. |
+| `enable()` / `disable()` | Settings toggle. `enable` requests permission and registers; `disable` calls `registerDevice(null)` and rejects when it does. Use `disable()` to turn push off (also on sign-out, in a `try`) so the token is not re-sent on the next launch. |
+| `syncToken()` | Registers the current token when permission is granted. Call it after a later sign-in when the user's saved preference is on: `prompt()` asks only once per install, and `disable()` on sign-out removed the token. |
+| `listen({ onReceived, onResponse })` | Subscribes and returns the unsubscribe function. `onResponse` also receives the tap that launched the app; each response is delivered once per app start, however often `listen` runs. Also keeps the token current: on start and whenever Expo rotates it, a token that differs from the last one sent is registered again. This runs only after a token was sent and `disable()` has not run since. Call it once at the root of the app. |
+| `setAndroidChannel(channel)` | Recreates the Android `default` channel, for example with translated texts once i18n is ready. |
 | `getPermissionStatus()`, `getPushToken()`, `requestPermissions()`, `hasPrompted()` | Lower-level steps. |
 
 `usePushNotifications(push, { enabled, persist })` gives a settings screen `permission`, `isEnabled`, `isLoading` and wrapped `prompt`/`enable`/`disable`. `enabled` is the saved preference; while it is on, the token is re-registered on mount.
@@ -520,12 +507,16 @@ const onToggle = async (on: boolean) => {
 ### Error boundary
 
 ```tsx
-import { ErrorBoundary } from 'expo-release/runtime'
+import { ErrorBoundary, getReleaseInfo } from 'expo-release/runtime'
 
 <ErrorBoundary
   fallback={({ error, reset }) => <ErrorScreen message={error.message} onRetry={reset} />}
   onError={(error, info) =>
-    posthog.captureException(error, { $exception_source: 'error_boundary', component_stack: info.componentStack })
+    posthog.captureException(error, {
+      $exception_source: 'error_boundary',
+      component_stack: info.componentStack,
+      ...getReleaseInfo()
+    })
   }
 >
   <App />
@@ -540,9 +531,9 @@ Composite actions for Bun monorepos, used as `HansKristoffer/expo-release/.githu
 
 | Action | Does |
 |--------|------|
-| `setup-workspace` | Bun (version from `package.json` `packageManager` by default), optional Node, restore the dependency cache keyed on `bun.lock`, always `bun install --frozen-lockfile`, save on a miss with `save-cache: 'true'`. `cache-paths` and `cache-key-files` are inputs. On a self-hosted runner it keeps `cache-paths` instead (see below). |
-| `playwright-browsers` | Restores browsers for the installed Playwright version; installs and saves on a miss. A self-hosted runner skips the cache and keeps `~/.cache/ms-playwright`. |
-| `pr-preview` | Railway preview environment per PR with its own PlanetScale Postgres branch and a Cloudflare-managed host. Creates on open/sync, deletes on close. The Railway CLI goes into the job's `$RUNNER_TEMP`. |
+| `setup-workspace` | Bun (version from `package.json` `packageManager` by default), optional Node, restore the dependency cache keyed on the OS, architecture and `bun.lock`, always `bun install --frozen-lockfile`, save on a miss with `save-cache: 'true'` (a failed save is a warning). `cache-paths` and `cache-key-files` are inputs. `env` on the `uses:` step reaches `bun install` and its postinstall scripts (a `DATABASE_URL` for a generated client, say). On a self-hosted runner it keeps `cache-paths` instead (see below). |
+| `playwright-browsers` | Restores browsers for the installed Playwright version and architecture; installs and saves on a miss. A self-hosted runner skips the cache and keeps `~/.cache/ms-playwright`. |
+| `pr-preview` | Railway preview environment per PR with its own PlanetScale Postgres branch and a Cloudflare-managed host. Creates on open/sync, deletes on close. It first checks every input and each provider's access and names each problem in its own annotation; a failed delete fails the job. The Railway CLI goes into the job's `$RUNNER_TEMP`. |
 | `ai-changelog` | Plain-language changelog of a pushed range with Claude; outputs `message` (chat) and `markdown`, optionally POSTs the message to a webhook. |
 
 ### Warm the caches on main
@@ -582,7 +573,7 @@ Use the same `cache-paths` in every job, since they are part of the cache versio
 
 ### Self-hosted runners
 
-A self-hosted runner keeps its workspace between jobs, so these actions keep what a hosted VM would restore. Check out with `clean: false`; `setup-workspace` then removes every untracked file except `cache-paths` and `keep-paths`, skips the cache, and skips `bun install` when the files named by `install-key-paths` and the Bun version are unchanged since that runner's last install. Add the files a postinstall reads:
+A self-hosted runner keeps its workspace between jobs, so these actions keep what a hosted VM would restore. Check out with `clean: false`; `setup-workspace` then removes every untracked file except `cache-paths` and `keep-paths`, skips the cache, and skips `bun install` when the files named by `install-key-paths` and the Bun version are unchanged since that runner's last install and every `cache-paths` entry without a glob still exists. When a checkout without `clean: false` wiped `node_modules`, it says so in a notice. Add the files a postinstall reads:
 
 ```yaml
       - uses: actions/checkout@v5
@@ -602,6 +593,8 @@ A self-hosted runner keeps its workspace between jobs, so these actions keep wha
             patches
             packages/prisma/schema
 ```
+
+On a self-hosted runner the release action points `TMPDIR` at the job's `runner.temp` when the job has not set it, so Metro's cache never collides with another user's `/tmp/metro-cache` (`EACCES`).
 
 ### PR preview environments
 

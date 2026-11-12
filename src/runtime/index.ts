@@ -5,6 +5,8 @@ export {
 } from './error-boundary'
 export {
 	checkForOTAUpdate,
+	getReleaseInfo,
+	type ReleaseInfo,
 	type ReloadApp,
 	type UseOTAUpdatesOptions,
 	useOTAUpdates

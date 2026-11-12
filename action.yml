@@ -4,11 +4,11 @@ author: Kristoffer Hansen
 
 inputs:
   command:
-    description: release (decide + operate), decide only, or operate only
+    description: release (decide + operate), decide only, operate only, or doctor
     required: false
     default: release
   profile:
-    description: EAS build profile (also used as the default update channel)
+    description: EAS build profile. Its eas.json channel, environment and env are the defaults.
     required: false
     default: production
   operation:
@@ -20,7 +20,7 @@ inputs:
     required: false
     default: none
   base:
-    description: Git base SHA for the impact diff. Defaults to github.event.before.
+    description: Git base SHA for the impact diff. Defaults to the merge base on a pull request, else github.event.before.
     required: false
     default: ''
   head:
@@ -32,11 +32,11 @@ inputs:
     required: false
     default: apps/expo/
   environment:
-    description: EAS environment passed to eas update. Required for Expo SDK 55+.
+    description: EAS environment passed to eas update. Required for Expo SDK 55+, where it defaults to the eas.json profile environment.
     required: false
     default: ''
   channel:
-    description: EAS Update channel. Defaults to the profile name.
+    description: EAS Update channel. Defaults to the eas.json profile channel, else the profile name.
     required: false
     default: ''
   platform:
@@ -60,7 +60,7 @@ inputs:
     required: false
     default: ''
   update-extra-args:
-    description: Extra tokens appended to eas update (e.g. --input-dir dist --skip-bundler)
+    description: Extra arguments appended to eas update, split like a shell (e.g. --input-dir dist --skip-bundler)
     required: false
     default: ''
   export-source-maps:
@@ -88,6 +88,15 @@ outputs:
   deploy_type:
     description: Stable PR-check type (none, ota, native)
     value: ${{ steps.release.outputs.deploy_type }}
+  changed:
+    description: Whether the change needs a deploy (deploy_type is not none)
+    value: ${{ steps.release.outputs.changed }}
+  reason:
+    description: Why decide chose deploy_type (no-impact-path, finished-build, build-in-progress, no-build-for-fingerprint)
+    value: ${{ steps.release.outputs.reason }}
+  changed_sources:
+    description: For a native decision, the fingerprint sources changed since the profile's last finished build, one per line
+    value: ${{ steps.release.outputs.changed_sources }}
   native_build_pending:
     description: Whether a matching native build is still in progress
     value: ${{ steps.release.outputs.native_build_pending }}
@@ -100,9 +109,21 @@ outputs:
   build_url:
     description: Matching EAS build URL, if any
     value: ${{ steps.release.outputs.build_url }}
+  queued_build_id:
+    description: The native build operate queued, if any
+    value: ${{ steps.release.outputs.queued_build_id }}
+  queued_build_url:
+    description: Dashboard URL of the native build operate queued, if any
+    value: ${{ steps.release.outputs.queued_build_url }}
   result:
-    description: Operate result (skipped, ota, native-build, recovery)
+    description: Operate result (skipped, ota, native-build, recovery), or failed
     value: ${{ steps.release.outputs.result }}
+  failed_stage:
+    description: The step that failed (fingerprint, build list, errored build, native build, ota export, ota update, pre-update, post-update, recovery, doctor)
+    value: ${{ steps.release.outputs.failed_stage }}
+  failure:
+    description: On failure, the last lines the failed command printed and the next step
+    value: ${{ steps.release.outputs.failure }}
 
 runs:
   using: composite
@@ -139,7 +160,9 @@ runs:
         EXPO_RELEASE_MESSAGE: ${{ inputs.message }}
         EXPO_RELEASE_DRY_RUN: ${{ inputs.dry-run }}
         GITHUB_EVENT_BEFORE: ${{ github.event.before }}
-      run: bun "$ACTION_PATH/src/cli.ts"
+      # The action's own tsconfig: Bun would otherwise read the app's, and warn
+      # about options it does not support (moduleSuffixes).
+      run: bun --tsconfig-override "$ACTION_PATH/tsconfig.json" "$ACTION_PATH/src/cli.ts"
 
     - name: Publish job summary
       if: always()
@@ -149,10 +172,17 @@ runs:
         OPERATION: ${{ inputs.operation }}
         PROFILE: ${{ inputs.profile }}
         PLATFORM: ${{ inputs.platform }}
+        AUTO_SUBMIT: ${{ inputs.auto-submit }}
         DEPLOY_TYPE: ${{ steps.release.outputs.deploy_type }}
+        REASON: ${{ steps.release.outputs.reason }}
         RESULT: ${{ steps.release.outputs.result || 'did not run' }}
+        FAILED_STAGE: ${{ steps.release.outputs.failed_stage }}
+        FAILURE: ${{ steps.release.outputs.failure }}
         FINGERPRINT: ${{ steps.release.outputs.fingerprint }}
         MATCHING_BUILD: ${{ steps.release.outputs.build_url || steps.release.outputs.build_id }}
+        QUEUED_BUILD: ${{ steps.release.outputs.queued_build_url || steps.release.outputs.queued_build_id }}
+        CHANGED_SOURCES: ${{ steps.release.outputs.changed_sources }}
+        COMPARED_BUILD: ${{ steps.release.outputs.compared_build_url }}
         NATIVE_PENDING: ${{ steps.release.outputs.native_build_pending }}
       run: |
         {
@@ -160,14 +190,35 @@ runs:
           echo ""
           echo "- Command: \`$COMMAND\`"
           echo "- Operation: \`$OPERATION\`"
-          echo "- Result: \`$RESULT\`"
+          if [[ -n "$FAILED_STAGE" ]]; then
+            echo "- Result: \`$RESULT\` at \`$FAILED_STAGE\`"
+          else
+            echo "- Result: \`$RESULT\`"
+          fi
           if [[ -n "$DEPLOY_TYPE" ]]; then
-            echo "- Deploy type: \`$DEPLOY_TYPE\`"
+            echo "- Deploy type: \`$DEPLOY_TYPE\` (\`${REASON:-unknown}\`)"
             echo "- Native build pending: \`${NATIVE_PENDING:-false}\`"
             echo "- Fingerprint: \`${FINGERPRINT:-none}\`"
             echo "- Matching build: ${MATCHING_BUILD:-none}"
           fi
-          if [[ "$COMMAND" == "release" ]]; then
-            echo "- New native builds are submitted automatically when auto-submit is enabled (TestFlight on iOS, Play on Android)."
+          if [[ -n "$QUEUED_BUILD" ]]; then
+            echo "- Queued build: $QUEUED_BUILD"
+          fi
+          if [[ "$RESULT" == "native-build" && "$AUTO_SUBMIT" == "true" ]]; then
+            echo "- The new build is submitted when it finishes (TestFlight on iOS, Play on Android)."
+          fi
+          if [[ -n "$CHANGED_SOURCES" ]]; then
+            echo ""
+            echo "Fingerprint sources changed since ${COMPARED_BUILD:-the last finished build}:"
+            echo ""
+            echo '```'
+            echo "$CHANGED_SOURCES"
+            echo '```'
+          fi
+          if [[ -n "$FAILURE" ]]; then
+            echo ""
+            echo '```'
+            echo "$FAILURE"
+            echo '```'
           fi
         } >> "$GITHUB_STEP_SUMMARY"

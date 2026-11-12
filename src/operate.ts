@@ -1,11 +1,13 @@
 import type { DeployType, Operation, ReleasePlatform } from './args'
+import { type EASBuild, parseBuildList } from './decide'
 import { appendGitHubOutput } from './github-output'
 import {
 	type CommandRunner,
 	dryRunCommand,
 	easCommand,
 	generateFingerprint,
-	runInherited
+	runInherited,
+	stage
 } from './run'
 import {
 	assertSourceMaps,
@@ -32,14 +34,23 @@ export type OperationInput = {
 	updateExtraArgs?: string
 	exportSourceMaps?: boolean
 	dryRun?: boolean
+	/** Called with the native build `eas build` queued, when it printed one. */
+	onQueuedBuild?: (build: EASBuild) => void
 	readPackageJson?: () => Promise<unknown>
 	hasSourceMaps?: () => Promise<boolean>
 }
 
 export type OperationResult = 'skipped' | 'ota' | 'native-build' | 'recovery'
 
-function extraUpdateArgs(value: string | undefined): string[] {
-	return value?.split(/\s+/).filter(Boolean) ?? []
+/** Splits like a shell: whitespace separates, single or double quotes group. */
+export function splitArgs(value: string | undefined): string[] {
+	const args: string[] = []
+	for (const match of (value ?? '').matchAll(
+		/"((?:\\.|[^"\\])*)"|'([^']*)'|(\S+)/g
+	)) {
+		args.push(match[1]?.replace(/\\(.)/g, '$1') ?? match[2] ?? match[3] ?? '')
+	}
+	return args
 }
 
 export function updateMessage(input: {
@@ -69,31 +80,40 @@ async function defaultReadPackageJson(): Promise<unknown> {
 	return file.json()
 }
 
-export async function requireEnvironmentIfNeeded(
-	input: Pick<OperationInput, 'environment' | 'readPackageJson'>
-) {
-	if (input.environment) return
-	const pkg = await (input.readPackageJson ?? defaultReadPackageJson)()
-	if (!pkg || typeof pkg !== 'object' || pkg === null) return
+/** The Expo SDK major from package.json, or null when it is not a version. */
+export async function readExpoSdkMajor(
+	readPackageJson: () => Promise<unknown> = defaultReadPackageJson
+): Promise<number | null> {
+	const pkg = await readPackageJson()
+	if (!pkg || typeof pkg !== 'object') return null
 	const record = pkg as {
 		dependencies?: { expo?: string }
 		devDependencies?: { expo?: string }
 	}
-	const version = record.dependencies?.expo ?? record.devDependencies?.expo
-	const major = parseExpoSdkMajor(version)
+	return parseExpoSdkMajor(
+		record.dependencies?.expo ?? record.devDependencies?.expo
+	)
+}
+
+export async function requireEnvironmentIfNeeded(
+	input: Pick<OperationInput, 'environment' | 'readPackageJson'>
+) {
+	if (input.environment) return
+	const major = await readExpoSdkMajor(input.readPackageJson)
 	if (major !== null && major >= 55) {
 		throw new Error(
-			'EAS Update requires --environment for Expo SDK 55+. Pass --environment <name>.'
+			'EAS Update requires --environment for Expo SDK 55+. Pass --environment <name> or set build.<profile>.environment in eas.json.'
 		)
 	}
 }
 
 async function runHook(
+	name: 'pre-update' | 'post-update',
 	command: string | undefined,
 	commandRunner: CommandRunner
 ) {
 	if (!command) return
-	await commandRunner(['bash', '-c', command])
+	await stage(name, () => commandRunner(['bash', '-c', command]))
 }
 
 function mutatingRunner(
@@ -115,12 +135,14 @@ async function publishUpdate(
 ) {
 	await requireEnvironmentIfNeeded(input)
 	if (input.exportSourceMaps) {
-		await commandRunner(sourceMapExportCommand(input.platform))
-		if (input.dryRun !== true) {
-			await assertSourceMaps(input.hasSourceMaps)
-		}
+		await stage('ota export', async () => {
+			await commandRunner(sourceMapExportCommand(input.platform))
+			if (input.dryRun !== true) {
+				await assertSourceMaps(input.hasSourceMaps)
+			}
+		})
 	}
-	await runHook(input.preUpdate, commandRunner)
+	await runHook('pre-update', input.preUpdate, commandRunner)
 	const command = easCommand(
 		'update',
 		'--channel',
@@ -136,18 +158,19 @@ async function publishUpdate(
 	}
 	command.push(
 		...mergeUpdateArgs(
-			extraUpdateArgs(input.updateExtraArgs),
+			splitArgs(input.updateExtraArgs),
 			input.exportSourceMaps === true
 		)
 	)
-	await commandRunner(command)
-	await runHook(input.postUpdate, commandRunner)
+	await stage('ota update', () => commandRunner(command))
+	await runHook('post-update', input.postUpdate, commandRunner)
 }
 
+/** Queues the build and reports the build EAS started (none in a dry run). */
 async function queueNativeBuild(
 	input: OperationInput,
 	commandRunner: CommandRunner
-) {
+): Promise<OperationResult> {
 	const command = easCommand(
 		'build',
 		'--platform',
@@ -155,12 +178,23 @@ async function queueNativeBuild(
 		'--profile',
 		input.profile,
 		'--non-interactive',
-		'--no-wait'
+		'--no-wait',
+		'--json'
 	)
 	if (input.autoSubmit) {
 		command.push('--auto-submit')
 	}
-	await commandRunner(command)
+	const output = await stage('native build', () => commandRunner(command))
+	// The build is queued; an unreadable record only loses the outputs.
+	try {
+		const queued = output.trim() ? parseBuildList(output)[0] : undefined
+		if (queued) input.onQueuedBuild?.(queued)
+	} catch (error) {
+		process.stderr.write(
+			`Warning: could not read the queued build from eas build --json: ${error instanceof Error ? error.message : String(error)}\n`
+		)
+	}
+	return 'native-build'
 }
 
 async function resolveRuntimeVersion(
@@ -169,7 +203,7 @@ async function resolveRuntimeVersion(
 ): Promise<string> {
 	if (input.runtimeVersion) return input.runtimeVersion
 	if (input.fingerprint) return input.fingerprint
-	return generateFingerprint(input, commandRunner)
+	return stage('fingerprint', () => generateFingerprint(input, commandRunner))
 }
 
 export async function operateRelease(
@@ -185,17 +219,20 @@ export async function operateRelease(
 					'Usage: --operation republish requires --group <update-group-id>'
 				)
 			}
+			const group = input.group
 			await requireEnvironmentIfNeeded(input)
-			await execute(
-				easCommand(
-					'update:republish',
-					'--group',
-					input.group,
-					'--platform',
-					input.platform,
-					'--message',
-					updateMessage(input),
-					'--non-interactive'
+			await stage('recovery', () =>
+				execute(
+					easCommand(
+						'update:republish',
+						'--group',
+						group,
+						'--platform',
+						input.platform,
+						'--message',
+						updateMessage(input),
+						'--non-interactive'
+					)
 				)
 			)
 			return 'recovery'
@@ -203,25 +240,26 @@ export async function operateRelease(
 		case 'rollback-embedded': {
 			await requireEnvironmentIfNeeded(input)
 			const runtimeVersion = await resolveRuntimeVersion(input, commandRunner)
-			await execute(
-				easCommand(
-					'update:roll-back-to-embedded',
-					'--channel',
-					input.channel,
-					'--platform',
-					input.platform,
-					'--runtime-version',
-					runtimeVersion,
-					'--message',
-					updateMessage(input),
-					'--non-interactive'
+			await stage('recovery', () =>
+				execute(
+					easCommand(
+						'update:roll-back-to-embedded',
+						'--channel',
+						input.channel,
+						'--platform',
+						input.platform,
+						'--runtime-version',
+						runtimeVersion,
+						'--message',
+						updateMessage(input),
+						'--non-interactive'
+					)
 				)
 			)
 			return 'recovery'
 		}
 		case 'force-native':
-			await queueNativeBuild(input, execute)
-			return 'native-build'
+			return queueNativeBuild(input, execute)
 		case 'retry-ota':
 			await publishUpdate(input, execute)
 			return 'ota'
@@ -237,8 +275,7 @@ export async function operateRelease(
 		case 'none':
 			return 'skipped'
 		case 'native':
-			await queueNativeBuild(input, execute)
-			return 'native-build'
+			return queueNativeBuild(input, execute)
 		case 'ota':
 			await publishUpdate(input, execute)
 			return 'ota'
@@ -249,6 +286,13 @@ export async function operateRelease(
 	}
 }
 
-export async function writeOperateGitHubOutput(result: OperationResult) {
-	await appendGitHubOutput({ result })
+export async function writeOperateGitHubOutput(
+	result: OperationResult,
+	queuedBuild?: EASBuild
+) {
+	await appendGitHubOutput({
+		result,
+		queued_build_id: queuedBuild?.id ?? '',
+		queued_build_url: queuedBuild?.buildUrl ?? ''
+	})
 }
