@@ -1,16 +1,32 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const cliPath = join(import.meta.dir, 'cli.ts')
 
 // Runs the bin like the composite action does: `bun src/cli.ts` with only the given env.
-function run(argv: string[], env: Record<string, string> = {}) {
+function run(
+	argv: string[],
+	env: Record<string, string> = {},
+	files: Record<string, string> = {}
+) {
 	const dir = mkdtempSync(join(tmpdir(), 'expo-release-cli-'))
 	const outputPath = join(dir, 'github-output')
+	const app = join(dir, 'app')
+	mkdirSync(app)
+	for (const [name, text] of Object.entries(files)) {
+		writeFileSync(join(app, name), text, { mode: 0o755 })
+	}
 	try {
 		const child = Bun.spawnSync(['bun', cliPath, ...argv], {
+			cwd: Object.keys(files).length > 0 ? app : undefined,
 			env: {
 				PATH: process.env.PATH ?? '',
 				HOME: process.env.HOME ?? '',
@@ -37,7 +53,7 @@ function run(argv: string[], env: Record<string, string> = {}) {
 }
 
 const noDeploy =
-	'{"deployType":"none","nativeBuildPending":false,"changedFiles":[],"fingerprint":null,"build":null}\n'
+	'{"deployType":"none","reason":"no-impact-path","nativeBuildPending":false,"changedFiles":[],"fingerprint":null,"build":null}\n'
 const diff = ['--profile', 'production', '--base', 'HEAD', '--head', 'HEAD']
 
 describe('help', () => {
@@ -66,11 +82,8 @@ describe('runs', () => {
 
 	test('operate prints the result and writes it', () => {
 		const result = run(['--profile', 'production', 'operate'])
-		expect(result).toMatchObject({
-			exitCode: 0,
-			stdout: 'skipped\n',
-			output: 'result<<EOF\nskipped\nEOF\n'
-		})
+		expect(result).toMatchObject({ exitCode: 0, stdout: 'skipped\n' })
+		expect(result.output).toStartWith('result<<EOF\nskipped\nEOF\n')
 	})
 
 	test('release decides, then operates', () => {
@@ -110,12 +123,10 @@ describe('runs', () => {
 			EXPO_RELEASE_AUTO_SUBMIT: 'false\n',
 			EXPO_RELEASE_DRY_RUN: ' true\n'
 		})
-		expect(result).toMatchObject({
-			exitCode: 0,
-			stdout: 'native-build\n',
-			stderr:
-				'[dry-run] eas build --platform android --profile production --non-interactive --no-wait\n'
-		})
+		expect(result).toMatchObject({ exitCode: 0, stdout: 'native-build\n' })
+		expect(result.stderr).toStartWith(
+			'[dry-run] eas build --platform android --profile production --non-interactive --no-wait --json\n'
+		)
 	})
 
 	test('operate --dry-run prints the EAS command it would run', () => {
@@ -129,12 +140,62 @@ describe('runs', () => {
 			'false',
 			'--dry-run'
 		])
-		expect(result).toMatchObject({
-			exitCode: 0,
-			stdout: 'native-build\n',
-			stderr:
-				'[dry-run] eas build --platform ios --profile production --non-interactive --no-wait\n'
+		expect(result).toMatchObject({ exitCode: 0, stdout: 'native-build\n' })
+		expect(result.stderr).toStartWith(
+			'[dry-run] eas build --platform ios --profile production --non-interactive --no-wait --json\n'
+		)
+	})
+
+	test('channel, environment and env come from the eas.json build profile', () => {
+		const easJson = JSON.stringify({
+			build: {
+				production: {
+					channel: 'live',
+					environment: 'production',
+					env: { APP_VARIANT: 'production' }
+				}
+			}
 		})
+		const result = run(
+			[
+				'operate',
+				'--profile',
+				'production',
+				'--deploy-type',
+				'ota',
+				'--dry-run'
+			],
+			{},
+			{ 'eas.json': easJson }
+		)
+		expect(result.exitCode).toBe(0)
+		expect(result.stderr).toContain(
+			'env from eas.json build.production: APP_VARIANT'
+		)
+		expect(result.stderr).toContain(
+			'[dry-run] eas update --channel live --platform ios'
+		)
+		expect(result.stderr).toContain('--environment production')
+	})
+
+	test('a failed EAS command reports its stage without a stack trace', () => {
+		const eas =
+			'#!/bin/sh\necho "Credentials are not set up. Run this command again in interactive mode." >&2\nexit 1\n'
+		const result = run(
+			['operate', '--profile', 'production', '--deploy-type', 'native'],
+			{ GITHUB_ACTIONS: 'true', EAS_BIN: './eas' },
+			{ eas, 'eas.json': '{"build":{"production":{}}}' }
+		)
+		expect(result.exitCode).toBe(1)
+		expect(result.stderr).toContain(
+			'::error title=expo-release%3A native build failed (production%2C ios)::Credentials are not set up.'
+		)
+		expect(result.stderr).not.toContain('    at ')
+		expect(result.output).toContain('result<<EOF\nfailed\nEOF')
+		expect(result.output).toContain('failed_stage<<EOF\nnative build\nEOF')
+		expect(result.output).toContain(
+			'eas credentials:configure-build --platform ios --profile production'
+		)
 	})
 
 	test('bad arguments exit 1', () => {

@@ -8,7 +8,9 @@ export {
 } from './args'
 export {
 	type DecisionInput,
+	type DecisionReason,
 	type EASBuild,
+	type FingerprintDiff,
 	type ReleaseDecision,
 	decideRelease
 } from './decide'

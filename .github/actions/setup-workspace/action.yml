@@ -2,7 +2,8 @@ name: Setup workspace
 description: >-
   Install Bun (and optionally Node), restore the dependency cache and install.
   Check out the repository first; on a self-hosted runner, check out with
-  `clean: false` so node_modules survives between jobs.
+  `clean: false` so node_modules survives between jobs. `env` on the step
+  reaches `bun install` and its postinstall scripts.
 
 inputs:
   bun-version:
@@ -18,7 +19,10 @@ inputs:
     required: false
     default: ''
   cache-paths:
-    description: Newline-separated paths to cache. A self-hosted runner keeps them instead of restoring them.
+    description: >-
+      Newline-separated paths to cache. A self-hosted runner keeps them instead
+      of restoring them, and installs again when a path without a glob is
+      missing (a deleted generated client, say).
     required: false
     default: |
       node_modules
@@ -67,13 +71,19 @@ runs:
         KEEP: |
           ${{ inputs.cache-paths }}
           ${{ inputs.keep-paths }}
+        # Outside the workspace, so a checkout that wipes it cannot remove it.
+        MARKER: ${{ runner.tool_cache }}/../.expo-release/${{ github.repository }}/installed
       run: |
         excludes=()
         while IFS= read -r path; do
           [ -n "$path" ] && excludes+=(-e "$path")
         done <<< "$KEEP"
         git clean -ffdxq "${excludes[@]}"
-        if [ -d node_modules ]; then echo "kept-node-modules=true" >> "$GITHUB_OUTPUT"; fi
+        if [ -d node_modules ]; then
+          echo "kept-node-modules=true" >> "$GITHUB_OUTPUT"
+        elif [ -f "$MARKER" ]; then
+          echo "::notice title=setup-workspace::node_modules is gone although this runner installed here before. Check out with clean: false so it survives between jobs."
+        fi
 
     - uses: oven-sh/setup-bun@v2
       with:
@@ -93,9 +103,9 @@ runs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ inputs.cache-paths }}
-        key: ${{ runner.os }}-bun-${{ hashFiles(inputs.cache-key-files) }}
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles(inputs.cache-key-files) }}
         restore-keys: |
-          ${{ runner.os }}-bun-
+          ${{ runner.os }}-${{ runner.arch }}-bun-
 
     # Install even on a hit: the key covers the lockfile only, so a hit can carry
     # workspace package copies from an older commit. A warm install relinks them.
@@ -106,6 +116,9 @@ runs:
       env:
         KEPT_NODE_MODULES: ${{ steps.clean.outputs.kept-node-modules == 'true' }}
         INSTALL_KEY_PATHS: ${{ inputs.install-key-paths }}
+        CACHE_PATHS: ${{ inputs.cache-paths }}
+        SELF_HOSTED: ${{ runner.environment == 'self-hosted' }}
+        MARKER: ${{ runner.tool_cache }}/../.expo-release/${{ github.repository }}/installed
       run: |
         pathspecs=()
         while IFS= read -r path; do
@@ -114,15 +127,32 @@ runs:
         key="$({ git ls-files -s -- "${pathspecs[@]}"; bun --version; } | git hash-object --stdin)"
         stamp=node_modules/.expo-release-install-key
 
-        if [ "$KEPT_NODE_MODULES" = true ] && [ "$(cat "$stamp" 2>/dev/null)" = "$key" ]; then
+        # A kept path the install produces, such as a generated client, can
+        # still be gone: then the stamp alone must not skip the install.
+        missing=""
+        while IFS= read -r path; do
+          [[ -z "$path" || "$path" == *[*?[]* ]] && continue
+          [ -e "$path" ] || missing="$path"
+        done <<< "$CACHE_PATHS"
+
+        if [ "$KEPT_NODE_MODULES" = true ] && [ -z "$missing" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$key" ]; then
           echo "Dependencies unchanged since this runner's last install; skipped."
           exit 0
         fi
+        if [ "$KEPT_NODE_MODULES" = true ] && [ -n "$missing" ]; then
+          echo "$missing is missing; installing."
+        fi
         bun install --frozen-lockfile
         echo "$key" > "$stamp"
+        if [ "$SELF_HOSTED" = true ]; then
+          mkdir -p "$(dirname "$MARKER")" && touch "$MARKER"
+        fi
 
+    # A failed save (a parallel job saved the same key first) only costs a
+    # warm cache next time.
     - if: inputs.save-cache == 'true' && steps.clean.outputs.kept-node-modules != 'true' && steps.cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
+      continue-on-error: true
       with:
         path: ${{ inputs.cache-paths }}
         key: ${{ steps.cache.outputs.cache-primary-key }}

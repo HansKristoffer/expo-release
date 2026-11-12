@@ -1,22 +1,126 @@
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+
 export type CommandRunner = (command: string[]) => Promise<string>
 
+/**
+ * The app's own eas-cli (node_modules/.bin, searched up to the repository
+ * root) wins over PATH: its lockfile pins the version. `EAS_BIN` wins over both.
+ */
 export function easCommand(...args: string[]): string[] {
 	const bin = process.env.EAS_BIN?.trim()
-	return [bin && bin.length > 0 ? bin : 'eas', ...args]
+	return [bin && bin.length > 0 ? bin : (localBin('eas') ?? 'eas'), ...args]
 }
 
-export async function runCaptured(command: string[]): Promise<string> {
-	const child = Bun.spawn(command, {
-		stdout: 'pipe',
-		stderr: 'pipe'
-	})
+const localBins = new Map<string, string | null>()
+
+/** `node_modules/.bin/<name>` from the working directory up to the repository root. */
+export function localBin(name: string): string | null {
+	const cwd = process.cwd()
+	const cacheKey = `${cwd}\0${name}`
+	const cached = localBins.get(cacheKey)
+	if (cached !== undefined) return cached
+	let bin: string | null = null
+	for (let dir = cwd; ; dir = dirname(dir)) {
+		const candidate = join(dir, 'node_modules', '.bin', name)
+		if (existsSync(candidate)) {
+			bin = candidate
+			break
+		}
+		if (existsSync(join(dir, '.git')) || dirname(dir) === dir) break
+	}
+	localBins.set(cacheKey, bin)
+	return bin
+}
+
+/** A failed command. `tail` holds its last non-empty output lines. */
+export class CommandError extends Error {
+	constructor(
+		message: string,
+		readonly tail: string[]
+	) {
+		super(message)
+		this.name = 'CommandError'
+	}
+}
+
+const ERROR_TAIL_LINES = 20
+
+function lastLines(output: string, count = ERROR_TAIL_LINES): string[] {
+	return output
+		.split('\n')
+		.map((line) => line.trimEnd())
+		.filter((line) => line.trim().length > 0)
+		.slice(-count)
+}
+
+async function collect(
+	stream: ReadableStream<Uint8Array>,
+	echo: NodeJS.WriteStream | null,
+	sink: string[]
+): Promise<string> {
+	const decoder = new TextDecoder()
+	let text = ''
+	for await (const chunk of stream) {
+		echo?.write(chunk)
+		const part = decoder.decode(chunk, { stream: true })
+		text += part
+		sink.push(part)
+	}
+	const rest = decoder.decode()
+	sink.push(rest)
+	return text + rest
+}
+
+async function spawn(
+	command: string[],
+	echoStdout: boolean,
+	echoStderr = true
+) {
+	const child = Bun.spawn(command, { stdout: 'pipe', stderr: 'pipe' })
+	// Both streams in arrival order, for the failure tail.
+	const combined: string[] = []
 	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
+		collect(child.stdout, echoStdout ? process.stdout : null, combined),
+		// stderr reaches the log: EAS prints its warnings and progress there.
+		collect(child.stderr, echoStderr ? process.stderr : null, combined),
 		child.exited
 	])
+	return { stdout, stderr, exitCode, tail: lastLines(combined.join('')) }
+}
+
+/** Runs a command for its stdout. stderr streams to the log. */
+export async function runCaptured(command: string[]): Promise<string> {
+	const { stdout, stderr, exitCode, tail } = await spawn(command, false)
 	if (exitCode !== 0) {
-		throw new Error(describeFailure(command, exitCode, { stderr, stdout }))
+		throw new CommandError(
+			describeFailure(command, exitCode, { stderr, stdout }),
+			tail
+		)
+	}
+	return stdout
+}
+
+/** Like runCaptured, but prints nothing: for checks that quote the error. */
+export async function runSilent(command: string[]): Promise<string> {
+	const { stdout, stderr, exitCode, tail } = await spawn(command, false, false)
+	if (exitCode !== 0) {
+		throw new CommandError(
+			describeFailure(command, exitCode, { stderr, stdout }),
+			tail
+		)
+	}
+	return stdout
+}
+
+/** Runs a command with its output in the log. Resolves its stdout. */
+export async function runInherited(command: string[]): Promise<string> {
+	const { stdout, exitCode, tail } = await spawn(command, true)
+	if (exitCode !== 0) {
+		throw new CommandError(
+			`Command failed with exit code ${exitCode}: ${quoteCommand(command)} (output above)`,
+			tail
+		)
 	}
 	return stdout
 }
@@ -50,23 +154,37 @@ export function describeFailure(
 	return sections.join('\n')
 }
 
-export async function runInherited(command: string[]): Promise<string> {
-	const child = Bun.spawn(command, { stdout: 'inherit', stderr: 'inherit' })
-	const exitCode = await child.exited
-	if (exitCode !== 0) {
-		throw new Error(
-			`Command failed with exit code ${exitCode}: ${quoteCommand(command)} (output above)`
-		)
+/**
+ * Parses the last JSON document in `output`. `preamble` is whatever came
+ * before it: eas-cli prints warnings to stdout before it switches to JSON-only
+ * output, for example when `npx expo config` failed and it fell back.
+ */
+export function parseJsonDocument(output: string): {
+	value: unknown
+	preamble: string
+} {
+	// A document starts at the beginning of the output or of a line; pretty
+	// printed JSON indents everything after its first line.
+	const starts = [0]
+	for (const match of output.matchAll(/\n(?=[[{])/g)) {
+		starts.push(match.index + 1)
 	}
-	return ''
+	for (const start of starts) {
+		try {
+			return {
+				value: JSON.parse(output.slice(start)) as unknown,
+				preamble: output.slice(0, start).trim()
+			}
+		} catch {}
+	}
+	throw new Error(`Expected JSON output, received:\n${tail(output)}`)
 }
 
+/** Parses JSON output, logging any text printed before it. */
 export function parseJson(output: string): unknown {
-	try {
-		return JSON.parse(output) as unknown
-	} catch {
-		throw new Error(`Expected JSON output, received:\n${output}`)
-	}
+	const { value, preamble } = parseJsonDocument(output)
+	if (preamble) process.stderr.write(`${preamble}\n`)
+	return value
 }
 
 export function getRecord(
@@ -80,7 +198,7 @@ export function getRecord(
 }
 
 export function parseFingerprintHash(output: string): string {
-	const record = getRecord(parseJson(output), 'EAS fingerprint')
+	const record = getRecord(parseJsonDocument(output).value, 'EAS fingerprint')
 	if (typeof record.hash !== 'string' || record.hash.length === 0) {
 		throw new Error('EAS fingerprint output did not contain a full hash')
 	}
@@ -99,21 +217,85 @@ export function dryRunCommand(command: string[]): void {
 	process.stderr.write(`[dry-run] ${quoteCommand(command)}\n`)
 }
 
+export type Stage =
+	| 'doctor'
+	| 'diff'
+	| 'fingerprint'
+	| 'build list'
+	| 'errored build'
+	| 'fingerprint diff'
+	| 'native build'
+	| 'ota export'
+	| 'ota update'
+	| 'pre-update'
+	| 'post-update'
+	| 'recovery'
+
+/** A failed release step: what ran, and the last lines it printed. */
+export class StageError extends Error {
+	constructor(
+		readonly stage: Stage,
+		message: string,
+		readonly tail: string[] = []
+	) {
+		super(message)
+		this.name = 'StageError'
+	}
+}
+
+/** Runs one release step, logs how long it took, and names it on failure. */
+export async function stage<T>(name: Stage, run: () => Promise<T>): Promise<T> {
+	const started = performance.now()
+	try {
+		return await run()
+	} catch (error) {
+		if (error instanceof StageError) throw error
+		throw new StageError(
+			name,
+			error instanceof Error ? error.message : String(error),
+			error instanceof CommandError ? error.tail : []
+		)
+	} finally {
+		const seconds = ((performance.now() - started) / 1000).toFixed(1)
+		process.stderr.write(`[expo-release] ${name}: ${seconds}s\n`)
+	}
+}
+
+/**
+ * The fingerprint fails when eas-cli printed anything before its JSON: that
+ * means the app config did not load and eas-cli fell back to its bundled
+ * `@expo/config`, whose fingerprint may not be the one EAS builds with.
+ * `explainConfig` runs `expo config` to surface the real error.
+ */
 export async function generateFingerprint(
 	input: { platform: string; profile: string },
-	commandRunner: CommandRunner
+	commandRunner: CommandRunner,
+	explainConfig?: () => Promise<string>
 ): Promise<string> {
-	return parseFingerprintHash(
-		await commandRunner(
-			easCommand(
-				'fingerprint:generate',
-				'--platform',
-				input.platform,
-				'--build-profile',
-				input.profile,
-				'--json',
-				'--non-interactive'
-			)
+	const output = await commandRunner(
+		easCommand(
+			'fingerprint:generate',
+			'--platform',
+			input.platform,
+			'--build-profile',
+			input.profile,
+			'--json',
+			'--non-interactive'
 		)
 	)
+	const { preamble } = parseJsonDocument(output)
+	if (preamble) {
+		const reason = explainConfig ? await explainConfig() : ''
+		throw new CommandError(
+			[
+				'eas fingerprint:generate could not load the app config and fell back to a default one, so its fingerprint may not match what EAS builds.',
+				`eas-cli printed:\n${preamble}`,
+				reason && `expo config said:\n${reason}`
+			]
+				.filter(Boolean)
+				.join('\n'),
+			lastLines(reason || preamble)
+		)
+	}
+	return parseFingerprintHash(output)
 }

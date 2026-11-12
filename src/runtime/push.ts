@@ -23,7 +23,10 @@ export interface PushNotificationsOptions {
 	onError?: (message: string, error: unknown) => void
 	/** Defaults to what expo-notifications reads from the app config. */
 	projectId?: string
-	/** Android channel `default`, needed for heads-up notifications. */
+	/**
+	 * Android channel `default`, needed for heads-up notifications. Call
+	 * `setAndroidChannel` again when its texts depend on the locale.
+	 */
 	androidChannel?: Notifications.NotificationChannelInput
 	/** How notifications show while the app is in the foreground. */
 	foregroundBehavior?: Notifications.NotificationBehavior
@@ -34,7 +37,10 @@ export interface PushNotificationsOptions {
 
 export interface NotificationListeners {
 	onReceived?: (notification: Notifications.Notification) => void
-	/** Also called with the response that launched the app, if any. */
+	/**
+	 * Also called with the response that launched the app, if any. Each
+	 * response is delivered once per app start, however often `listen` runs.
+	 */
 	onResponse?: (response: Notifications.NotificationResponse) => void
 }
 
@@ -66,18 +72,27 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 			}
 	})
 	// Channels exist only on Android; elsewhere this resolves to null.
-	Notifications.setNotificationChannelAsync(
-		'default',
-		options.androidChannel ?? {
+	function setAndroidChannel(
+		channel: Notifications.NotificationChannelInput = {
 			name: 'Default',
 			importance: Notifications.AndroidImportance.HIGH,
 			vibrationPattern: [0, 250, 250, 250]
 		}
-	).catch((error: unknown) =>
-		onError('Failed to create the notification channel', error)
-	)
+	) {
+		return Notifications.setNotificationChannelAsync('default', channel)
+			.then(() => undefined)
+			.catch((error: unknown) =>
+				onError('Failed to create the notification channel', error)
+			)
+	}
+	void setAndroidChannel(options.androidChannel)
 
 	let pendingPrompt: Promise<boolean> | null = null
+	// Responses already handed to onResponse: the launch response is replayed
+	// by every getLastNotificationResponse call.
+	const deliveredResponses = new Set<string>()
+	const responseKey = (response: Notifications.NotificationResponse) =>
+		`${response.notification?.request?.identifier}:${response.actionIdentifier}`
 
 	const getPermissionStatus = () => Notifications.getPermissionsAsync()
 
@@ -181,6 +196,8 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 		requestPermissions,
 		getPushToken,
 		syncToken,
+		/** Recreates the Android `default` channel, for example after a locale change. */
+		setAndroidChannel,
 
 		/**
 		 * Asks for push once per install (after sign-in, say), then registers the
@@ -205,7 +222,11 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 			return true
 		},
 
-		/** Removes this device's token from your backend. */
+		/**
+		 * Removes this device's token from your backend, and stops `listen` from
+		 * re-registering it. Rejects when `registerDevice(null)` does, so a
+		 * settings screen can show the failure; catch it on sign-out.
+		 */
 		async disable() {
 			await registerDevice(null)
 			// KeyValueStorage has no removeItem; an empty token means none was sent.
@@ -222,16 +243,24 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 					onError('Failed to refresh the push token', error)
 				)
 			void refresh()
+			const deliver =
+				onResponse &&
+				((response: Notifications.NotificationResponse) => {
+					const key = responseKey(response)
+					if (deliveredResponses.has(key)) return
+					deliveredResponses.add(key)
+					onResponse(response)
+				})
 			const subscriptions = [
 				Notifications.addPushTokenListener(refresh),
 				onReceived && Notifications.addNotificationReceivedListener(onReceived),
-				onResponse &&
-					Notifications.addNotificationResponseReceivedListener(onResponse)
+				deliver &&
+					Notifications.addNotificationResponseReceivedListener(deliver)
 			]
-			const launchResponse = onResponse
+			const launchResponse = deliver
 				? Notifications.getLastNotificationResponse()
 				: null
-			if (launchResponse) onResponse?.(launchResponse)
+			if (launchResponse) deliver?.(launchResponse)
 			return () => {
 				for (const subscription of subscriptions) subscription?.remove()
 			}

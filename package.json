@@ -65,7 +65,8 @@
 		"expo-device": ">=55",
 		"expo-notifications": ">=55",
 		"expo-updates": ">=55",
-		"react": ">=19"
+		"react": ">=19",
+		"react-native": ">=0.79"
 	},
 	"peerDependenciesMeta": {
 		"expo-device": {
@@ -78,6 +79,9 @@
 			"optional": true
 		},
 		"react": {
+			"optional": true
+		},
+		"react-native": {
 			"optional": true
 		}
 	},

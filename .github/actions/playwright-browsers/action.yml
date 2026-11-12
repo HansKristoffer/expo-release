@@ -38,7 +38,7 @@ runs:
       uses: actions/cache/restore@v6
       with:
         path: ~/.cache/ms-playwright
-        key: ${{ runner.os }}-playwright-${{ steps.version.outputs.version }}-${{ inputs.browsers }}
+        key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.version.outputs.version }}-${{ inputs.browsers }}
 
     # No --with-deps: ubuntu-latest already carries the libraries Chromium needs;
     # a self-hosted machine is provisioned with them.

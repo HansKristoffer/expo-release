@@ -104,6 +104,43 @@ runs:
         npm install -g --prefix "$RUNNER_TEMP/railway-cli" "@railway/cli@$VERSION"
         echo "$RUNNER_TEMP/railway-cli/bin" >> "$GITHUB_PATH"
 
+    # Composite actions do not enforce `required`, so an unset secret arrives
+    # empty. Check every provider before changing any, and name each problem.
+    - name: Check provider access
+      shell: bash
+      env:
+        PLANETSCALE_SERVICE_TOKEN_ID: ${{ inputs.planetscale-service-token-id }}
+        PLANETSCALE_SERVICE_TOKEN: ${{ inputs.planetscale-service-token }}
+        PSCALE_ORG: ${{ inputs.planetscale-org }}
+        PSCALE_DB: ${{ inputs.planetscale-database }}
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        RAILWAY_PROJECT_ID: ${{ inputs.railway-project-id }}
+        RAILWAY_SERVICE: ${{ inputs.railway-service }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
+        CLOUDFLARE_ZONE_NAME: ${{ inputs.cloudflare-zone-name }}
+      run: |
+        failed=0
+        fail() { echo "::error title=pr-preview: $1::$2"; failed=1; }
+        for name in PLANETSCALE_SERVICE_TOKEN_ID PLANETSCALE_SERVICE_TOKEN PSCALE_ORG PSCALE_DB \
+          RAILWAY_API_TOKEN RAILWAY_PROJECT_ID RAILWAY_SERVICE \
+          CLOUDFLARE_API_TOKEN CLOUDFLARE_ZONE_ID CLOUDFLARE_ZONE_NAME; do
+          [ -n "${!name}" ] || fail inputs "$name is empty; pass its secret to the action"
+        done
+        [ "$failed" = 0 ] || exit 1
+
+        if ! out=$(pscale database show "$PSCALE_DB" --org "$PSCALE_ORG" 2>&1); then
+          fail PlanetScale "database $PSCALE_DB not found in the organization, or the service token cannot read it: $(echo "$out" | tail -n 1)"
+        fi
+        if ! out=$(railway whoami 2>&1); then
+          fail Railway "token rejected: $(echo "$out" | tail -n 1)"
+        fi
+        if ! curl -fsS -o /dev/null -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+          "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID"; then
+          fail Cloudflare "zone $CLOUDFLARE_ZONE_ID not found, or the token cannot read it"
+        fi
+        exit "$failed"
+
     # ---------------------------------------------------------------- create
 
     - name: Ensure PlanetScale branch
@@ -259,8 +296,14 @@ runs:
         PSCALE_DB: ${{ inputs.planetscale-database }}
         PS_BRANCH: ${{ steps.names.outputs.name }}
       run: |
-        pscale branch delete "$PSCALE_DB" "$PS_BRANCH" --org "$PSCALE_ORG" --force \
-          || echo "Branch $PS_BRANCH already gone."
+        set -euo pipefail
+        # Access was checked above, so a missing branch is the only reason
+        # `show` fails here. Any delete error is real.
+        if pscale branch show "$PSCALE_DB" "$PS_BRANCH" --org "$PSCALE_ORG" >/dev/null 2>&1; then
+          pscale branch delete "$PSCALE_DB" "$PS_BRANCH" --org "$PSCALE_ORG" --force
+        else
+          echo "Branch $PS_BRANCH already gone."
+        fi
 
     - name: Delete preview DNS
       if: steps.names.outputs.operation == 'destroy'
@@ -288,7 +331,9 @@ runs:
         set -euo pipefail
         railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_SOURCE_ENV" --service "$RAILWAY_SERVICE" --json
         if railway status --json | jq -e --arg n "$RAILWAY_ENV" '.environments.edges | map(.node.name) | index($n) != null' >/dev/null; then
-          railway environment delete "$RAILWAY_ENV" --yes || echo "Deleting $RAILWAY_ENV failed; delete it by hand."
+          # A failed delete leaves a paid environment running: fail loudly.
+          railway environment delete "$RAILWAY_ENV" --yes \
+            || { echo "::error title=pr-preview: Railway::deleting environment $RAILWAY_ENV failed; delete it by hand"; exit 1; }
         else
           echo "Railway environment $RAILWAY_ENV already gone."
         fi

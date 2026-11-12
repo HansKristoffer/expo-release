@@ -248,6 +248,19 @@ describe('createPushNotifications', () => {
 		expect(registered).toEqual(['ExponentPushToken[abc]', null])
 	})
 
+	test('listen delivers each response once, however often it runs', () => {
+		launchResponse = {
+			actionIdentifier: 'default',
+			notification: { request: { identifier: 'launch' } }
+		}
+		const { push } = setup()
+		const onResponse = mock()
+
+		push.listen({ onResponse })()
+		push.listen({ onResponse })()
+		expect(onResponse).toHaveBeenCalledTimes(1)
+	})
+
 	test('listen replays the launch response and unsubscribes', () => {
 		launchResponse = { notification: { id: 'launch' } }
 		const { push } = setup()

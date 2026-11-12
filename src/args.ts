@@ -1,11 +1,12 @@
 import type { CommandContext } from 'hanzio/cli'
 import { z } from 'zod'
+import type { BuildProfile } from './eas-json'
 
 export const DEFAULT_IMPACT_PATHS = ['apps/expo/'] as const
 
 export type ReleasePlatform = 'ios' | 'android'
 
-export type CommandName = 'release' | 'decide' | 'operate'
+export type CommandName = 'release' | 'decide' | 'operate' | 'doctor'
 
 export type Operation =
 	| 'deploy'
@@ -70,9 +71,9 @@ export const releaseFlags = z
 			.min(1)
 			.meta({ env: 'EXPO_RELEASE_PROFILE' })
 			.describe('EAS build profile, also the default update channel'),
-		base: text('BASE')
-			.meta({ env: ['EXPO_RELEASE_BASE', 'GITHUB_EVENT_BEFORE'] })
-			.describe('Git base SHA for the impact diff'),
+		base: text('BASE').describe(
+			'Git base SHA for the impact diff (default: the merge base on a pull request, else github.event.before)'
+		),
 		head: text('HEAD')
 			.meta({ env: ['EXPO_RELEASE_HEAD', 'GITHUB_SHA'] })
 			.describe('Git head SHA for the impact diff'),
@@ -117,10 +118,10 @@ export const releaseFlags = z
 			.meta({ env: 'EXPO_RELEASE_DEPLOY_TYPE' })
 			.describe('Decision type for operate'),
 		channel: text('CHANNEL').describe(
-			'EAS Update channel (default: the profile)'
+			'EAS Update channel (default: the eas.json profile channel, else the profile name)'
 		),
 		environment: text('ENVIRONMENT').describe(
-			'EAS environment for eas update (required for Expo SDK 55+)'
+			'EAS environment for eas update (default: the eas.json profile environment; required for Expo SDK 55+)'
 		),
 		autoSubmit: trueFalse('AUTO_SUBMIT', 'true').describe(
 			'Pass --auto-submit on native builds'
@@ -168,14 +169,18 @@ export const releaseFlags = z
 
 export type ReleaseFlags = z.output<typeof releaseFlags>
 
+/** Flags win over the eas.json build profile, which wins over the profile name. */
 export function toReleaseOptions(
 	command: CommandName,
-	{ context: flags }: CommandContext<ReleaseFlags>
+	{ context: flags }: Pick<CommandContext<ReleaseFlags>, 'context'>,
+	buildProfile: BuildProfile | null = null
 ): ReleaseOptions {
+	const environment = flags.environment ?? buildProfile?.environment
 	return {
 		...flags,
 		command,
-		channel: flags.channel ?? flags.profile
+		channel: flags.channel ?? buildProfile?.channel ?? flags.profile,
+		...(environment ? { environment } : {})
 	}
 }
 
