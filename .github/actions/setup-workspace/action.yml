@@ -21,8 +21,9 @@ inputs:
   cache-paths:
     description: >-
       Newline-separated paths to cache. A self-hosted runner keeps them instead
-      of restoring them, and installs again when a path without a glob is
-      missing (a deleted generated client, say).
+      of restoring them, and installs again when a relative path without a
+      glob is missing (a deleted generated client, say), so list only paths
+      the install creates.
     required: false
     default: |
       node_modules
@@ -131,7 +132,8 @@ runs:
         # still be gone: then the stamp alone must not skip the install.
         missing=""
         while IFS= read -r path; do
-          [[ -z "$path" || "$path" == *[*?[]* ]] && continue
+          # Only workspace paths the install creates count; skip globs, ~ and absolute paths.
+          [[ -z "$path" || "$path" == *[*?[]* || "$path" == "~"* || "$path" == /* ]] && continue
           [ -e "$path" ] || missing="$path"
         done <<< "$CACHE_PATHS"
 

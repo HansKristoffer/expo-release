@@ -196,11 +196,13 @@ async function checkTrackedFiles(
 	)
 	if (nativeDirs.length === 0) return
 	const ignore = (await readFile('.fingerprintignore')) ?? ''
+	// Only a pattern for the whole folder hides it; `android/build/**` and the
+	// like are ordinary ignores.
+	const lines = ignore.split('\n').map((line) => line.trim().replace(/^\//, ''))
 	const hidden = nativeDirs.filter((dir) =>
-		ignore
-			.split('\n')
-			.map((line) => line.trim().replace(/^\//, ''))
-			.some((line) => line === dir || line.startsWith(`${dir}/`))
+		lines.some((line) =>
+			[dir, `${dir}/`, `${dir}/*`, `${dir}/**`, `${dir}/**/*`].includes(line)
+		)
 	)
 	if (hidden.length > 0) {
 		findings.push({

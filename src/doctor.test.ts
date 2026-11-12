@@ -99,6 +99,22 @@ describe('runDoctor', () => {
 		])
 	})
 
+	test('ordinary ignores inside a committed native folder are fine', async () => {
+		const findings = await runDoctor(
+			input({
+				readFile: async (path) =>
+					path === '.fingerprintignore'
+						? 'android/build/**\nios/Pods/**\nandroid/.gradle\n'
+						: null
+			}),
+			runner({
+				'--version': 'eas-cli/16.32.0',
+				'ls-files': 'android/app/build.gradle\nios/Podfile'
+			})
+		)
+		expect(findings).toEqual([])
+	})
+
 	test('the full run loads the app config', async () => {
 		const findings = await runDoctor(
 			input({ full: true }),

@@ -32,7 +32,7 @@ inputs:
     required: false
     default: apps/expo/
   environment:
-    description: EAS environment passed to eas update. Defaults to the eas.json profile environment. Required for Expo SDK 55+.
+    description: EAS environment passed to eas update. Required for Expo SDK 55+, where it defaults to the eas.json profile environment.
     required: false
     default: ''
   channel:

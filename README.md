@@ -167,7 +167,7 @@ jobs:
           runtime-version: ${{ github.event.inputs.runtime-version }}
 ```
 
-The release reads `build.<profile>` from `eas.json` in `working-directory` (following `extends`, like eas-cli): its `channel` and `environment` are the defaults for `channel` and `environment`, and each variable in its `env` that the job has not set is set for every EAS command and hook, as EAS sets them on the build machine. Inputs and variables you set win.
+The release reads `build.<profile>` from `eas.json` in `working-directory` (following `extends`, like eas-cli): its `channel` is the default for `channel`; on Expo SDK 55+ its `environment` is the default for `environment` (before 55, `--environment` also turns off `.env` loading in `eas update`, so it is never added unasked); and each variable in its `env` that the job has not set is set for every EAS command and hook, as EAS sets them on the build machine. Inputs and variables you set win.
 
 A manual `deploy` from `workflow_dispatch` ignores the impact diff. That is intentional: dispatch after an unrelated commit should still release, not silently skip.
 
@@ -181,7 +181,7 @@ A manual `deploy` from `workflow_dispatch` ignores the impact diff. That is inte
 | `deploy-type` | `none` | Used only when `command` is `operate` |
 | `base` / `head` | merge base on a PR, else event before / `GITHUB_SHA` | Git range for the impact diff |
 | `impact-paths` | `apps/expo/` | Comma-separated repo-root prefixes |
-| `environment` | eas.json profile `environment` | Passed to `eas update`. Required for Expo SDK 55+ |
+| `environment` | eas.json profile `environment` on SDK 55+ | Passed to `eas update`. Required for Expo SDK 55+ |
 | `channel` | eas.json profile `channel`, else `profile` | EAS Update channel |
 | `platform` | `ios` | `ios` or `android`. Passed through to `eas update` and `eas build` |
 | `auto-submit` | `true` | Native builds use `--auto-submit` |

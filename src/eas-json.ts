@@ -19,7 +19,17 @@ export type EasJson = {
 export async function readEasJson(path = 'eas.json'): Promise<EasJson | null> {
 	const file = Bun.file(path)
 	if (!(await file.exists())) return null
-	const value = Bun.JSON5.parse(await file.text())
+	const text = await file.text()
+	let value: unknown
+	try {
+		value = JSON.parse(text)
+	} catch (error) {
+		// eas-cli also accepts JSON5 (comments, trailing commas). Bun.JSON5 is
+		// missing on older Bun, where plain JSON still works.
+		const json5 = (Bun as { JSON5?: { parse(text: string): unknown } }).JSON5
+		if (!json5) throw error
+		value = json5.parse(text)
+	}
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
 		throw new Error(`${path} must hold an object`)
 	}

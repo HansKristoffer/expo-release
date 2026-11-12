@@ -129,7 +129,8 @@ runs:
         done
         [ "$failed" = 0 ] || exit 1
 
-        if ! out=$(pscale database show "$PSCALE_DB" --org "$PSCALE_ORG" 2>&1); then
+        # branch list needs only read_branch, which the token already has.
+        if ! out=$(pscale branch list "$PSCALE_DB" --org "$PSCALE_ORG" 2>&1); then
           fail PlanetScale "database $PSCALE_DB not found in the organization, or the service token cannot read it: $(echo "$out" | tail -n 1)"
         fi
         if ! out=$(railway whoami 2>&1); then

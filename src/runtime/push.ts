@@ -88,11 +88,13 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 	void setAndroidChannel(options.androidChannel)
 
 	let pendingPrompt: Promise<boolean> | null = null
-	// Responses already handed to onResponse: the launch response is replayed
-	// by every getLastNotificationResponse call.
+	// Responses already handed to onResponse. Every getLastNotificationResponse
+	// call returns the last one again, so a replay is skipped once delivered;
+	// live taps always go through. A repeating notification keeps its
+	// identifier, so the date is part of the key.
 	const deliveredResponses = new Set<string>()
 	const responseKey = (response: Notifications.NotificationResponse) =>
-		`${response.notification?.request?.identifier}:${response.actionIdentifier}`
+		`${response.notification?.request?.identifier}:${response.notification?.date}:${response.actionIdentifier}`
 
 	const getPermissionStatus = () => Notifications.getPermissionsAsync()
 
@@ -246,9 +248,7 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 			const deliver =
 				onResponse &&
 				((response: Notifications.NotificationResponse) => {
-					const key = responseKey(response)
-					if (deliveredResponses.has(key)) return
-					deliveredResponses.add(key)
+					deliveredResponses.add(responseKey(response))
 					onResponse(response)
 				})
 			const subscriptions = [
@@ -260,7 +260,11 @@ export function createPushNotifications(options: PushNotificationsOptions) {
 			const launchResponse = deliver
 				? Notifications.getLastNotificationResponse()
 				: null
-			if (launchResponse) deliver?.(launchResponse)
+			if (
+				launchResponse &&
+				!deliveredResponses.has(responseKey(launchResponse))
+			)
+				deliver?.(launchResponse)
 			return () => {
 				for (const subscription of subscriptions) subscription?.remove()
 			}

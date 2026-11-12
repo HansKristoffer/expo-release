@@ -166,7 +166,10 @@ describe('runs', () => {
 				'--dry-run'
 			],
 			{},
-			{ 'eas.json': easJson }
+			{
+				'eas.json': easJson,
+				'package.json': '{"dependencies":{"expo":"~55.0.0"}}'
+			}
 		)
 		expect(result.exitCode).toBe(0)
 		expect(result.stderr).toContain(
@@ -176,6 +179,26 @@ describe('runs', () => {
 			'[dry-run] eas update --channel live --platform ios'
 		)
 		expect(result.stderr).toContain('--environment production')
+	})
+
+	test('before SDK 55 the eas.json environment is not a default', () => {
+		const result = run(
+			[
+				'operate',
+				'--profile',
+				'production',
+				'--deploy-type',
+				'ota',
+				'--dry-run'
+			],
+			{},
+			{
+				'eas.json': '{"build":{"production":{"environment":"production"}}}',
+				'package.json': '{"dependencies":{"expo":"~54.0.0"}}'
+			}
+		)
+		expect(result.exitCode).toBe(0)
+		expect(result.stderr).not.toContain('--environment')
 	})
 
 	test('a failed EAS command reports its stage without a stack trace', () => {

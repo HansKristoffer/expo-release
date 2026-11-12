@@ -52,6 +52,16 @@ describe('runInherited', () => {
 	})
 })
 
+describe('a background process left by a command', () => {
+	test('does not hold the run open', async () => {
+		const started = performance.now()
+		expect(await runInherited(['bash', '-c', 'echo hi; sleep 5 &'])).toBe(
+			'hi\n'
+		)
+		expect(performance.now() - started).toBeLessThan(3000)
+	})
+})
+
 describe('parseJsonDocument', () => {
 	test('reads the last document and returns what came before it', () => {
 		expect(

@@ -121,7 +121,7 @@ export const releaseFlags = z
 			'EAS Update channel (default: the eas.json profile channel, else the profile name)'
 		),
 		environment: text('ENVIRONMENT').describe(
-			'EAS environment for eas update (default: the eas.json profile environment; required for Expo SDK 55+)'
+			'EAS environment for eas update (required for Expo SDK 55+, where it defaults to the eas.json profile environment)'
 		),
 		autoSubmit: trueFalse('AUTO_SUBMIT', 'true').describe(
 			'Pass --auto-submit on native builds'

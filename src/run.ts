@@ -54,22 +54,38 @@ function lastLines(output: string, count = ERROR_TAIL_LINES): string[] {
 		.slice(-count)
 }
 
-async function collect(
+// After the command exits, a background process it started can keep the
+// pipes open; stop reading after this long instead of waiting for it.
+const DRAIN_AFTER_EXIT_MS = 1000
+
+function collect(
 	stream: ReadableStream<Uint8Array>,
 	echo: NodeJS.WriteStream | null,
 	sink: string[]
-): Promise<string> {
+) {
+	const reader = stream.getReader()
 	const decoder = new TextDecoder()
 	let text = ''
-	for await (const chunk of stream) {
-		echo?.write(chunk)
-		const part = decoder.decode(chunk, { stream: true })
-		text += part
-		sink.push(part)
+	const done = (async () => {
+		try {
+			for (;;) {
+				const { value, done } = await reader.read()
+				if (done) break
+				echo?.write(value)
+				const part = decoder.decode(value, { stream: true })
+				text += part
+				sink.push(part)
+			}
+		} catch {}
+		const rest = decoder.decode()
+		sink.push(rest)
+		text += rest
+	})()
+	return {
+		done,
+		stop: () => reader.cancel().catch(() => undefined),
+		text: () => text
 	}
-	const rest = decoder.decode()
-	sink.push(rest)
-	return text + rest
 }
 
 async function spawn(
@@ -80,13 +96,37 @@ async function spawn(
 	const child = Bun.spawn(command, { stdout: 'pipe', stderr: 'pipe' })
 	// Both streams in arrival order, for the failure tail.
 	const combined: string[] = []
-	const [stdout, stderr, exitCode] = await Promise.all([
-		collect(child.stdout, echoStdout ? process.stdout : null, combined),
-		// stderr reaches the log: EAS prints its warnings and progress there.
-		collect(child.stderr, echoStderr ? process.stderr : null, combined),
-		child.exited
+	const out = collect(
+		child.stdout,
+		echoStdout ? process.stdout : null,
+		combined
+	)
+	// stderr reaches the log: EAS prints its warnings and progress there.
+	const err = collect(
+		child.stderr,
+		echoStderr ? process.stderr : null,
+		combined
+	)
+	const exitCode = await child.exited
+	const drained = Promise.all([out.done, err.done])
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const timedOut = await Promise.race([
+		drained.then(() => false),
+		new Promise<boolean>((resolve) => {
+			timer = setTimeout(() => resolve(true), DRAIN_AFTER_EXIT_MS)
+		})
 	])
-	return { stdout, stderr, exitCode, tail: lastLines(combined.join('')) }
+	clearTimeout(timer)
+	if (timedOut) {
+		await Promise.all([out.stop(), err.stop()])
+		await drained
+	}
+	return {
+		stdout: out.text(),
+		stderr: err.text(),
+		exitCode,
+		tail: lastLines(combined.join(''))
+	}
 }
 
 /** Runs a command for its stdout. stderr streams to the log. */

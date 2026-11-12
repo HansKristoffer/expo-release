@@ -7,6 +7,7 @@ let launchResponse: unknown = null
 let tokenError: Error | null = null
 let token = 'ExponentPushToken[abc]'
 let rotateToken: ((devicePushToken: unknown) => void) | undefined
+let tapListener: ((response: unknown) => void) | undefined
 const removed: string[] = []
 
 const notifications = {
@@ -30,9 +31,12 @@ const notifications = {
 	addNotificationReceivedListener: () => ({
 		remove: () => removed.push('received')
 	}),
-	addNotificationResponseReceivedListener: () => ({
-		remove: () => removed.push('response')
-	}),
+	addNotificationResponseReceivedListener: (
+		listener: (response: unknown) => void
+	) => {
+		tapListener = listener
+		return { remove: () => removed.push('response') }
+	},
 	getLastNotificationResponse: () => launchResponse
 }
 
@@ -259,6 +263,29 @@ describe('createPushNotifications', () => {
 		push.listen({ onResponse })()
 		push.listen({ onResponse })()
 		expect(onResponse).toHaveBeenCalledTimes(1)
+	})
+
+	test('a repeating notification is delivered on every tap', () => {
+		launchResponse = null
+		const { push } = setup()
+		const onResponse = mock()
+		push.listen({ onResponse })
+		const tap = (date: number) =>
+			tapListener?.({
+				actionIdentifier: 'default',
+				notification: { date, request: { identifier: 'daily' } }
+			})
+		tap(1)
+		tap(2)
+		expect(onResponse).toHaveBeenCalledTimes(2)
+
+		// The replay of the last tap is skipped.
+		launchResponse = {
+			actionIdentifier: 'default',
+			notification: { date: 2, request: { identifier: 'daily' } }
+		}
+		push.listen({ onResponse })
+		expect(onResponse).toHaveBeenCalledTimes(2)
 	})
 
 	test('listen replays the launch response and unsubscribes', () => {

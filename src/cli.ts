@@ -35,6 +35,7 @@ import { appendGitHubOutput } from './github-output'
 import {
 	type OperationInput,
 	operateRelease,
+	readExpoSdkMajor,
 	writeOperateGitHubOutput
 } from './operate'
 import { type Stage, StageError } from './run'
@@ -73,8 +74,15 @@ async function prepare(command: CommandName, ctx: Context): Promise<Prepared> {
 			`[expo-release] env from eas.json build.${ctx.context.profile}: ${applied.join(', ')}\n`
 		)
 	}
+	// `eas update --environment` also turns off .env loading, so the profile's
+	// environment is a default only where SDK 55+ requires one anyway.
+	const sdk = await readExpoSdkMajor().catch(() => null)
+	const defaults =
+		buildProfile && (sdk === null || sdk < 55)
+			? { ...buildProfile, environment: undefined }
+			: buildProfile
 	current = {
-		options: toReleaseOptions(command, ctx, buildProfile),
+		options: toReleaseOptions(command, ctx, defaults),
 		easJson,
 		buildProfile
 	}
