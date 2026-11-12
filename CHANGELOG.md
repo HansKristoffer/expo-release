@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.4.0](https://github.com/HansKristoffer/expo-release/compare/v2.3.2...v2.4.0) (2026-11-12)
+
+
+### Features
+
+* **cli:** add expo-release doctor and run its quick checks before decide ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **cli:** default channel, environment and env from the eas.json build profile ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **cli:** name the failed stage, quote EAS's last lines in one annotation and the job summary, write result=failed and failed_stage ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **cli:** run the app's own eas and expo binaries ahead of PATH ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **decide:** output reason and, for a native decision, the fingerprint sources changed since the last finished build ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **operate:** output the queued native build and default base to the pull request merge base ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **runtime:** add getReleaseInfo, recheckOnForeground and setAndroidChannel; deliver each push response once ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+
+
+### Bug Fixes
+
+* **actions:** add runner.arch to cache keys, make the cache save non-fatal, reinstall when a kept path is missing ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **action:** set TMPDIR to runner.temp on self-hosted runners and run Bun with the action's tsconfig ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **cli:** fail the fingerprint with expo config's error when eas-cli fell back from a broken app config ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **decide:** read eas build:list's project, runtimeVersion and error fields, so build_url is set and an errored build names EAS's error ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **operate:** split update-extra-args like a shell ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+* **pr-preview:** check provider access first and stop hiding failed deletes ([8f9e769](https://github.com/HansKristoffer/expo-release/commit/8f9e7691d4c4c631c037b35c1117318ae4597b82))
+
 ## [2.3.2](https://github.com/HansKristoffer/expo-release/compare/v2.3.1...v2.3.2) (2026-10-21)
 
 
